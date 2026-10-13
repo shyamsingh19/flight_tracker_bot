@@ -110,6 +110,7 @@ SCHEMA = {
     },
     "ui": {
         "history_default_n": (20, int, 1, 500),
+        "search_results_n": (5, int, 1, 20),
         "checknow_confirm_above_inr": (1, float, 0, 10**5),
     },
 }

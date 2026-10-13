@@ -1,31 +1,40 @@
 """Telegram bot: commands, jobs (tick, heartbeat, summary, backup). Entry point: python bot.py"""
 import asyncio
+import calendar
 import html
 import json
 import logging
 import os
 import re
 import tempfile
-from datetime import UTC, date, datetime, time
+import warnings
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from urllib.request import urlopen
 from zoneinfo import ZoneInfo
 
-from telegram import LinkPreviewOptions, Update
+from telegram import BotCommand, InlineKeyboardButton as Btn, InlineKeyboardMarkup as Kb, LinkPreviewOptions, Update
 from telegram.constants import ParseMode
-from telegram.ext import Application, CommandHandler, ContextTypes, Defaults, MessageHandler, filters
+from telegram.warnings import PTBUserWarning
+from telegram.ext import (Application, ApplicationHandlerStop, CallbackQueryHandler, CommandHandler, ContextTypes,
+                          ConversationHandler, Defaults, MessageHandler, TypeHandler, filters)
 
+import alerts
 import budget
 import checker
 import config
 import db
+import providers
 from alerts import day_label, inr
 from db import iso, parse
 
+# The search conversation is per chat and may start from a button; that's intended.
+warnings.filterwarnings("ignore", message=".*per_message=False.*", category=PTBUserWarning)
 CONFIG_PATH = os.environ.get("CONFIG_PATH", "config.toml")
 log = logging.getLogger("bot")
 
 HELP = """✈️ Flight price alert
+/search — guided search: city → city → date → pick a flight to track
 /track HYD DEL 2026-12-20 [flex=5] [target=4500] [stops=0] [airline=6E] [flight=6E2134] [time=06-12] [bags=1] [every=120] [force]
 /list · /history id · /status
 /checknow id [all] · /settarget id 4500|off
@@ -94,7 +103,7 @@ async def say(update, text):
 
 # ---------------------------------------------------------------- commands
 
-async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await say(update, html.escape(HELP))
 
 
@@ -143,6 +152,11 @@ async def cmd_track(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         route, force = parse_track(cfg, ctx.args, checker.local(cfg, now).date())
     except ValueError as e:
         return await say(update, f"❌ {html.escape(str(e))}")
+    await say(update, save_route(cfg, route, force, now))
+
+
+def save_route(cfg, route, force, now):
+    """Insert a parsed route unless it would push projected spend past the hard stop → reply text."""
     route["created_at"] = iso(now)
     route["calibration"] = int(cfg["calibration"]["enabled"] and route["anchor_every_min"] is None
                                and not db.one("SELECT 1 FROM routes WHERE calibration=1"))
@@ -150,22 +164,22 @@ async def cmd_track(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lo, hi = checker.projected(cfg, now, extra=route)
     stop = budget.hard_stop_inr(cfg)
     if hi > stop and not force:
-        return await say(update, f"❌ Not saved. With this route, projected spend is {inr(lo)}–{inr(hi)}/month, over the "
-                                 f"{inr(stop)} hard stop. Raise [budget] monthly_cap_inr in config.toml and /reload, "
-                                 f"use a smaller flex= or every=120, or add 'force'.")
+        return (f"❌ Not saved. With this route, projected spend is {inr(lo)}–{inr(hi)}/month, over the "
+                f"{inr(stop)} hard stop. Raise [budget] monthly_cap_inr in config.toml and /reload, "
+                f"use a smaller flex= or every=120, or add 'force' to /track.")
     rid = db.insert("routes", route)
     note = (f"\n🧪 Calibration route: D every {cfg['calibration']['anchor_every_min']} min for "
             f"{cfg['calibration']['days']} days." if route["calibration"] else "")
-    await say(update, f"✅ Tracking #{rid} {route['origin']}→{route['destination']} {day_label(route['anchor_date'])} "
-                      f"±{route['flex_days']}. This route ≈ {inr(lo - lo0)}–{inr(hi - hi0)}/month; all routes "
-                      f"{inr(lo)}–{inr(hi)} (cap {inr(cfg['budget']['monthly_cap_inr'])}). First check within a "
-                      f"minute if inside active hours.{note}")
+    what = " ".join(x for x in [route["flight_no"], "direct only" if route["max_stops"] == 0 else ""] if x)
+    return (f"✅ Tracking #{rid} {route['origin']}→{route['destination']} {day_label(route['anchor_date'])} "
+            f"±{route['flex_days']} days{' · ' + what if what else ''}. This route ≈ {inr(lo - lo0)}–{inr(hi - hi0)}"
+            f"/month; all routes {inr(lo)}–{inr(hi)} (cap {inr(cfg['budget']['monthly_cap_inr'])}). First check "
+            f"within a minute if inside active hours.{note}")
 
 
 async def cmd_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    now = now_utc()
-    rows = db.q("SELECT * FROM routes WHERE status IN ('active','paused') ORDER BY id")
-    await say(update, "\n".join(route_line(r, now) for r in rows) or "No routes. Use /track.")
+    text, kb = alerts_view(now_utc())
+    await say_kb(update, text, kb)
 
 
 async def set_status(update, ctx, status):
@@ -287,9 +301,234 @@ def status_text(cfg, now):
     return "\n".join(lines)
 
 
-async def unauthorized(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Runs before every handler: anyone but ALLOWED_USER_ID gets no reply."""
     u = update.effective_user
-    log.warning("ignored message from unauthorized user %s (%s)", u.id if u else None, u.username if u else None)
+    if not u or u.id != int(os.environ["ALLOWED_USER_ID"]):
+        log.warning("ignored update from unauthorized user %s (%s)", u.id if u else None, u.username if u else None)
+        raise ApplicationHandlerStop
+
+
+# ---------------------------------------------------------------- guided flow: menu → search → track
+
+ORIGIN, DEST, DAY = range(3)
+# Domestic airports by the names people type. Any 3-letter IATA code also works.
+CITIES = {
+    "hyderabad": "HYD", "delhi": "DEL", "new delhi": "DEL", "mumbai": "BOM", "bombay": "BOM",
+    "bengaluru": "BLR", "bangalore": "BLR", "chennai": "MAA", "madras": "MAA", "kolkata": "CCU",
+    "calcutta": "CCU", "goa": "GOI", "north goa": "GOX", "mopa": "GOX", "pune": "PNQ", "ahmedabad": "AMD",
+    "jaipur": "JAI", "kochi": "COK", "cochin": "COK", "lucknow": "LKO", "guwahati": "GAU",
+    "bhubaneswar": "BBI", "patna": "PAT", "srinagar": "SXR", "chandigarh": "IXC", "varanasi": "VNS",
+    "visakhapatnam": "VTZ", "vizag": "VTZ", "coimbatore": "CJB", "thiruvananthapuram": "TRV",
+    "trivandrum": "TRV", "indore": "IDR", "nagpur": "NAG", "bagdogra": "IXB", "siliguri": "IXB",
+    "amritsar": "ATQ", "ranchi": "IXR", "raipur": "RPR", "bhopal": "BHO", "mangaluru": "IXE",
+    "mangalore": "IXE", "madurai": "IXM", "tirupati": "TIR", "vijayawada": "VGA", "rajahmundry": "RJA",
+    "udaipur": "UDR", "jodhpur": "JDH", "leh": "IXL", "jammu": "IXJ", "dehradun": "DED", "agartala": "IXA",
+    "imphal": "IMF", "port blair": "IXZ", "surat": "STV", "vadodara": "BDQ", "aurangabad": "IXU",
+    "dibrugarh": "DIB", "kozhikode": "CCJ", "calicut": "CCJ", "kannur": "CNN", "hubli": "HBX",
+    "belgaum": "IXG", "belagavi": "IXG", "mysuru": "MYQ", "tiruchirappalli": "TRZ", "trichy": "TRZ",
+}
+MONTHS = {m.lower(): i for i, m in enumerate(calendar.month_abbr) if m}
+
+
+def airport(text):
+    t = " ".join(text.lower().replace("airport", "").split())
+    if t in CITIES:
+        return CITIES[t]
+    return t.upper() if re.fullmatch(r"[a-z]{3}", t) else None
+
+
+def parse_day(text, today):
+    """'6 november', 'Nov 6', '06.11', '6/11/2026', '2026-11-06', 'tomorrow' → date (next occurrence)."""
+    t = " ".join(text.lower().replace(",", " ").split())
+    if t in ("today", "tomorrow"):
+        return today + timedelta(days=t == "tomorrow")
+    try:
+        return date.fromisoformat(t)
+    except ValueError:
+        pass
+    if m := re.fullmatch(r"(\d{1,2})[./-](\d{1,2})(?:[./-](\d{2}|\d{4}))?", t):
+        d, mo, y = m.groups()
+    elif m := re.fullmatch(r"(\d{1,2})(?:st|nd|rd|th)? ([a-z]+)\.?(?: (\d{4}))?", t):
+        d, mo, y = m.group(1), MONTHS.get(m.group(2)[:3]), m.group(3)
+    elif m := re.fullmatch(r"([a-z]+)\.? (\d{1,2})(?:st|nd|rd|th)?(?: (\d{4}))?", t):
+        d, mo, y = m.group(2), MONTHS.get(m.group(1)[:3]), m.group(3)
+    else:
+        raise ValueError(text)
+    if not mo:
+        raise ValueError(text)
+    if y:
+        return date(int(y) + (2000 if len(y) == 2 else 0), int(mo), int(d))
+    day = date(today.year, int(mo), int(d))
+    return day if day >= today else date(today.year + 1, int(mo), int(d))
+
+
+MENU = Kb([[Btn("🔍 Flight Search", callback_data="menu:search"), Btn("🔔 My Alerts", callback_data="menu:alerts")],
+           [Btn("📊 Status", callback_data="menu:status"), Btn("❓ Help", callback_data="menu:help")]])
+
+
+async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text("✈️ Alright, please choose what we will do 👇", reply_markup=MENU)
+
+
+async def menu_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    what = q.data.split(":")[1]
+    if what == "alerts":
+        text, kb = alerts_view(now_utc())
+        await q.message.reply_text(text, reply_markup=kb)
+    elif what == "status":
+        await q.message.reply_text(status_text(cfg_of(ctx), now_utc()))
+    elif what == "help":
+        await q.message.reply_text(html.escape(HELP))
+    else:
+        await q.message.reply_text("✈️ Alright, please choose what we will do 👇", reply_markup=MENU)
+
+
+async def search_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.callback_query:
+        await update.callback_query.answer()
+    await update.effective_message.reply_text("🏠 What's your departure city? For example, Hyderabad.")
+    return ORIGIN
+
+
+async def search_origin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not (code := airport(update.message.text)):
+        await say(update, "❓ I don't know that city. Try another name or the 3-letter airport code (e.g. HYD).")
+        return ORIGIN
+    ctx.user_data["search"] = {"o": code}
+    await say(update, f"🛫 From {code}. What's your destination? For example, New Delhi.")
+    return DEST
+
+
+async def search_dest(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    code = airport(update.message.text)
+    if not code or code == ctx.user_data["search"]["o"]:
+        await say(update, "❓ I don't know that city (or it's the same as the departure). Try again or use the code.")
+        return DEST
+    ctx.user_data["search"]["d"] = code
+    await say(update, f"👍 {ctx.user_data['search']['o']} → {code}. Specify the date of departure "
+                      "(e.g. \"6 november\", \"06.11\" or \"2026-11-06\").")
+    return DAY
+
+
+async def search_change_date(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
+    if not {"o", "d"} <= set(ctx.user_data.get("search", {})):
+        return await search_start(update, ctx)
+    await update.effective_message.reply_text("📅 New date of departure?")
+    return DAY
+
+
+async def search_day(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    cfg, now = cfg_of(ctx), now_utc()
+    today = checker.local(cfg, now).date()
+    try:
+        day = parse_day(update.message.text, today)
+    except ValueError:
+        await say(update, "❓ I couldn't read that date. Try \"6 november\" or \"06.11\".")
+        return DAY
+    if day < today:
+        await say(update, "❓ That date has passed. Another one?")
+        return DAY
+    s = ctx.user_data["search"]
+    s.update(day=day.isoformat(), direct=False)
+    await say(update, "Ok, give me a few seconds 🔍")
+    try:
+        s["offers"] = await asyncio.to_thread(run_search, cfg, s["o"], s["d"], s["day"], now)
+    except providers.ProviderError as e:
+        await say(update, f"⚠️ Search failed: {html.escape(e.message)}")
+        return ConversationHandler.END
+    text, kb = results_view(cfg, s)
+    await say_kb(update, text, kb)
+    return ConversationHandler.END
+
+
+async def search_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await say(update, "Cancelled.")
+    return ConversationHandler.END
+
+
+def run_search(cfg, o, d, day, now):
+    """One Ignav call for the menu search; counted in the spend ledger like any other."""
+    if why := budget.blocked(cfg, now):
+        raise providers.ProviderError(why, attempts=0)
+    try:
+        offers, _, attempts = checker.search(cfg, o, d, day, cfg["search"]["max_stops"], None)
+    except providers.ProviderError as e:
+        budget.record(cfg, now, "search", e.attempts)
+        raise
+    budget.record(cfg, now, "search", attempts)
+    return sorted(offers, key=lambda x: x["price_inr"])
+
+
+def results_view(cfg, s):
+    shown = [o for o in s["offers"] if not s["direct"] or o["stops"] == 0][:cfg["ui"]["search_results_n"]]
+    head = f"📍 {s['o']} → {s['d']} · {day_label(s['day'])}"
+    if not shown:
+        lines = [head, "No flights found" + (" (direct only)." if s["direct"] else ".")]
+    else:
+        lines = [f"{head} · {len(s['offers'])} flights, cheapest {len(shown)}{' direct' if s['direct'] else ''}:"]
+        for i, o in enumerate(shown, 1):
+            stops = "Direct" if o["stops"] == 0 else f"{o['stops']} stop{'s' * (o['stops'] > 1)}"
+            arr = f" → {o['arr_local'][11:16]}" + (" +1" if o["arr_local"][:10] > o["dep_local"][:10] else "") \
+                if o.get("arr_local") else ""
+            bags = f" · {o['bags']} bag" if o["bags"] else ""
+            lines.append(f"\n{i}. ✈️ {o['flight_no']} · {stops}\n    🕐 {o['dep_local'][11:16]}{arr} · <b>{inr(o['price_inr'])}</b>{bags}")
+    lines.append("\n" + alerts.gf_link({"origin": s["o"], "destination": s["d"]}, s["day"]))
+    rows = [[Btn(f"🔔 Track {o['flight_no']} · {inr(o['price_inr'])}", callback_data=f"s:f:{i}")]
+            for i, o in enumerate(shown)]
+    rows += [[Btn("🔔 Track cheapest any flight", callback_data="s:trk")],
+             [Btn("🔀 All flights" if s["direct"] else "✈️ Direct only", callback_data="s:direct"),
+              Btn("📅 Change date", callback_data="s:date")],
+             [Btn("🔍 New search", callback_data="menu:search"), Btn("☰ Menu", callback_data="menu:main")]]
+    return "\n".join(lines), Kb(rows)
+
+
+async def search_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    cfg, now = cfg_of(ctx), now_utc()
+    s = ctx.user_data.get("search")
+    if not s or "offers" not in s:
+        await q.answer("This search has expired. Start a new one.", show_alert=True)
+        return
+    await q.answer()
+    if q.data == "s:direct":
+        s["direct"] = not s["direct"]
+        text, kb = results_view(cfg, s)
+        await q.edit_message_text(text, reply_markup=kb)
+        return
+    flight = None
+    if q.data.startswith("s:f:"):
+        shown = [o for o in s["offers"] if not s["direct"] or o["stops"] == 0]
+        flight = shown[int(q.data.split(":")[2])]["flight_no"]
+    route, _ = parse_track(cfg, [s["o"], s["d"], s["day"]] + (["stops=0"] if s["direct"] else [])
+                           + ([f"flight={flight}"] if flight else []), checker.local(cfg, now).date())
+    await q.message.reply_text(save_route(cfg, route, False, now))
+
+
+def alerts_view(now):
+    rows = db.q("SELECT * FROM routes WHERE status IN ('active','paused') ORDER BY id")
+    if not rows:
+        return "🔔 No price alerts yet.", Kb([[Btn("🔍 Flight Search", callback_data="menu:search")]])
+    kb = [[Btn(f"❌ Delete #{r['id']}", callback_data=f"r:deleted:{r['id']}"),
+           Btn(f"⏸ Pause #{r['id']}" if r["status"] == "active" else f"▶️ Resume #{r['id']}",
+               callback_data=f"r:{'paused' if r['status'] == 'active' else 'active'}:{r['id']}")] for r in rows]
+    return "🔔 Your price alerts:\n\n" + "\n\n".join(route_line(r, now) for r in rows), Kb(kb)
+
+
+async def route_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    _, status, rid = q.data.split(":")
+    db.update_route(int(rid), status=status)
+    await q.answer(f"#{rid} → {status}")
+    text, kb = alerts_view(now_utc())
+    await q.edit_message_text(text, reply_markup=kb)
+
+
+async def say_kb(update, text, kb):
+    await update.effective_message.reply_text(text, reply_markup=kb)
 
 
 # ---------------------------------------------------------------- jobs
@@ -349,6 +588,9 @@ async def on_error(update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def post_init(app):
+    await app.bot.set_my_commands([BotCommand("start", "Menu"), BotCommand("search", "Guided flight search"),
+                                   BotCommand("list", "My price alerts"), BotCommand("status", "Health and spend"),
+                                   BotCommand("help", "All commands")])
     await app.bot.send_message(int(os.environ["ALLOWED_USER_ID"]),
                                f"🟢 Bot started. {projection_text(app.bot_data['cfg'], now_utc())}")
 
@@ -361,20 +603,33 @@ def main():
     logging.basicConfig(level=cfg["monitoring"]["log_level"], handlers=[h])
     logging.getLogger("httpx").setLevel(logging.WARNING)
     db.init()
-    auth = filters.User(user_id=int(os.environ["ALLOWED_USER_ID"]))
-    app = (Application.builder().token(os.environ["TELEGRAM_TOKEN"]).post_init(post_init)
+    build_app(cfg, os.environ["TELEGRAM_TOKEN"]).run_polling(allowed_updates=Update.ALL_TYPES)
+
+
+def build_app(cfg, token):
+    app = (Application.builder().token(token).post_init(post_init)
            .defaults(Defaults(parse_mode=ParseMode.HTML, link_preview_options=LinkPreviewOptions(is_disabled=True)))
            .build())
     app.bot_data["cfg"] = cfg
-    for name, fn in [("start", cmd_start), ("help", cmd_start), ("track", cmd_track), ("list", cmd_list),
+    app.add_handler(TypeHandler(Update, gate), group=-1)
+    text = filters.TEXT & ~filters.COMMAND
+    app.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("search", search_start), CallbackQueryHandler(search_start, "^menu:search$"),
+                      CallbackQueryHandler(search_change_date, "^s:date$")],
+        states={ORIGIN: [MessageHandler(text, search_origin)], DEST: [MessageHandler(text, search_dest)],
+                DAY: [MessageHandler(text, search_day)]},
+        fallbacks=[CommandHandler("cancel", search_cancel)], allow_reentry=True))
+    app.add_handler(CallbackQueryHandler(menu_button, "^menu:"))
+    app.add_handler(CallbackQueryHandler(search_button, "^s:"))
+    app.add_handler(CallbackQueryHandler(route_button, "^r:"))
+    for name, fn in [("start", cmd_start), ("help", cmd_help), ("track", cmd_track), ("list", cmd_list),
                      ("delete", cmd_delete), ("pause", cmd_pause), ("resume", cmd_resume),
                      ("settarget", cmd_settarget), ("history", cmd_history), ("checknow", cmd_checknow),
                      ("reload", cmd_reload), ("status", cmd_status)]:
-        app.add_handler(CommandHandler(name, fn, filters=auth))
-    app.add_handler(MessageHandler(~auth, unauthorized))
+        app.add_handler(CommandHandler(name, fn))
     app.add_error_handler(on_error)
     schedule_jobs(app)
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    return app
 
 
 if __name__ == "__main__":

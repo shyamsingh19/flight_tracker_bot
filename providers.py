@@ -73,7 +73,8 @@ def parse(data, cfg):
         offers.append({
             "price_inr": round(price["amount"]), "price_status": price["status"], "airline": cc,
             "flight_no": num if num.startswith(cc) else cc + num,
-            "dep_local": s0["departure_time_local"], "stops": len(segs) - 1,
+            "dep_local": s0["departure_time_local"], "arr_local": segs[-1]["arrival_time_local"],
+            "stops": len(segs) - 1,
             "bags": (it.get("bags") or {}).get("checked")})
     return offers, bool(data.get("cache_hit"))
 

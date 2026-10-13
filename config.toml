@@ -82,4 +82,5 @@ max_cache_hit_pct   = 50         # block a 30-min upgrade if re-checks are mostl
 
 [ui]
 history_default_n   = 20
+search_results_n    = 5          # flights shown (each with a Track button) after a menu search
 checknow_confirm_above_inr = 1   # ask before /checknow calls costing more than this

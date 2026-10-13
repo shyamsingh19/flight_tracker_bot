@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS routes(
 CREATE TABLE IF NOT EXISTS observations(
   id INTEGER PRIMARY KEY, route_id INTEGER NOT NULL REFERENCES routes(id), depart_date TEXT NOT NULL,
   kind TEXT NOT NULL, observed_at TEXT NOT NULL, provider TEXT NOT NULL, ok INTEGER NOT NULL, error TEXT,
-  price_inr INTEGER, price_status TEXT, cache_hit INTEGER, airline TEXT, flight_no TEXT, dep_local TEXT,
+  price_inr INTEGER, price_status TEXT, cache_hit INTEGER, airline TEXT, flight_no TEXT, dep_local TEXT, arr_local TEXT,
   stops INTEGER, bags INTEGER);
 CREATE INDEX IF NOT EXISTS obs_route_date ON observations(route_id, depart_date, observed_at);
 CREATE TABLE IF NOT EXISTS alerts(
@@ -50,6 +50,8 @@ def init():
     with closing(connect()) as c:
         c.execute("PRAGMA journal_mode=WAL")
         c.executescript(SCHEMA)
+        if "arr_local" not in {r[1] for r in c.execute("PRAGMA table_info(observations)")}:
+            c.execute("ALTER TABLE observations ADD COLUMN arr_local TEXT")  # databases from before 2026-10-13
 
 
 def q(sql, args=()):

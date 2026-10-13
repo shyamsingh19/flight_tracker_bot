@@ -381,5 +381,58 @@ class TestCalibration(Base):
         self.assertTrue(db.kv_get(f"calib_reported:{rid}"))
 
 
+try:
+    import bot
+except ImportError:  # python-telegram-bot not installed (system python); the venv has it
+    bot = None
+
+
+@unittest.skipUnless(bot, "python-telegram-bot not installed")
+class TestGuidedFlow(Base):
+    def test_airport_names(self):
+        for text, code in [("Hyderabad", "HYD"), ("New delhi", "DEL"), (" new  Delhi ", "DEL"), ("goa", "GOI"),
+                           ("bom", "BOM"), ("Bangalore airport", "BLR"), ("Atlantis", None)]:
+            self.assertEqual(bot.airport(text), code, text)
+
+    def test_parse_day(self):
+        today = date(2026, 10, 13)
+        for text, want in [("6 november", "2026-11-06"), ("Nov 6", "2026-11-06"), ("6th Nov", "2026-11-06"),
+                           ("06.11", "2026-11-06"), ("6/11/2026", "2026-11-06"), ("2026-11-06", "2026-11-06"),
+                           ("5 march", "2027-03-05"), ("tomorrow", "2026-10-14"), ("12 oct 2027", "2027-10-12")]:
+            self.assertEqual(bot.parse_day(text, today).isoformat(), want, text)
+        for bad in ["someday", "32 nov", "6 smarch"]:
+            with self.assertRaises(ValueError):
+                bot.parse_day(bad, today)
+
+    def test_search_results_and_track_buttons(self):
+        self.fake.prices["2026-11-06"] = [offer(9922, "2026-11-06", "6E668", stops=1),
+                                          offer(11200, "2026-11-06", "AI2880", dep="17:45") | {"arr_local": "2026-11-06T20:00:00"}]
+        s = {"o": "HYD", "d": "DEL", "day": "2026-11-06", "direct": False}
+        s["offers"] = bot.run_search(self.cfg, "HYD", "DEL", "2026-11-06", at("2026-10-13", 15))
+        self.assertEqual(budget.calls_used(), 1)
+        text, kb = bot.results_view(self.cfg, s)
+        self.assertIn("1 stop", text)
+        self.assertIn("17:45 → 20:00", text)
+        self.assertEqual(kb.inline_keyboard[0][0].callback_data, "s:f:0")
+        s["direct"] = True
+        text, kb = bot.results_view(self.cfg, s)
+        self.assertNotIn("6E668", text)
+        self.assertIn("Track AI2880", kb.inline_keyboard[0][0].text)
+        route, _ = bot.parse_track(self.cfg, ["HYD", "DEL", "2026-11-06", "stops=0", "flight=AI2880"], date(2026, 10, 13))
+        self.assertIn("✅ Tracking #1", bot.save_route(self.cfg, route, False, at("2026-10-13", 15)))
+        self.assertEqual(db.route(1)["flight_no"], "AI2880")
+
+    def test_alerts_view_buttons(self):
+        self.route()
+        text, kb = bot.alerts_view(at("2026-12-01", 9))
+        self.assertIn("#1 HYD→DEL", text)
+        self.assertEqual([b.callback_data for b in kb.inline_keyboard[0]], ["r:deleted:1", "r:paused:1"])
+
+    def test_app_wiring_builds(self):
+        app = bot.build_app(self.cfg, "123:abc")
+        self.assertEqual(len(app.handlers[-1]), 1)  # the authorization gate
+        self.assertEqual({j.name for j in app.job_queue.jobs()}, {"tick", "heartbeat", "summary", "backup"})
+
+
 if __name__ == "__main__":
     unittest.main()
