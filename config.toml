@@ -1,0 +1,85 @@
+# Flight price alert — every tunable number lives here (plan §4.2a).
+# Secrets go in .env. Edit, then send /reload: the bot validates the file and
+# replies with the projected monthly cost. An invalid file is rejected and the
+# previous config stays active.
+
+[search]                         # what one Ignav query asks for
+market              = "IN"       # Ignav market; IN returns INR
+currency            = "INR"      # responses in any other currency are rejected
+adults              = 1
+cabin_class         = "economy"  # economy | premium_economy | business | first
+max_stops           = 1          # default; per-route stops= overrides
+allow_self_transfer = false
+
+[schedule]
+timezone            = "Asia/Kolkata"
+active_hours        = "08-23"    # no scheduled API calls outside this window
+tick_seconds        = 60         # how often the scheduler looks for due work (no API call)
+anchor_every_min    = 60         # date D; calibration may suggest 30 or 120
+buffer_scan_every_h = 24         # D±flex, a multiple of 24; 0 = only during bursts
+buffer_scan_at      = "08:00"    # right after D's first check of the day
+alt_watch_every_h   = 3          # cheapest near-tied alternative; 0 = off
+far_out_days        = 45
+far_out_slowdown    = 3          # ×3 slower beyond far_out_days
+min_interval_min    = 15         # floor for any per-route interval
+
+[route_defaults]
+flex_days           = 5          # buffer D±N for the daily scan
+max_flex_days       = 7          # reject /track flex= above this
+burst_flex_days     = 5          # D±N searched immediately on a good deal (5 or 7)
+burst_cooldown_h    = 12
+
+[deal]
+baseline_days       = 30         # history window for "normal price"
+good_percentile     = 25
+great_percentile    = 10
+min_samples         = 20
+freshness_h         = 26         # older prices excluded from comparisons
+drop_abs_inr        = 300        # "D dropped": both conditions
+drop_pct            = 5
+drop_window_h       = 24         # compared with D's lowest in this window
+alt_cheaper_abs_inr = 300        # "cheaper alternative": max(abs, pct)
+alt_cheaper_pct     = 5
+alt_realert_h       = 24         # once per alternative date per window…
+alt_realert_abs_inr = 100        # …unless the saving grows by this much
+realert_abs_inr     = 100        # good-deal / target re-alert: both conditions
+realert_pct         = 3
+near_tie_inr        = 200        # alternative watch: within abs or pct of D
+near_tie_pct        = 3
+recheck_unverified  = true       # re-check unverified/cached prices before alerting
+recheck_tolerance_pct = 2        # alert only if the re-check is within this
+
+[provider]                       # Ignav client behaviour
+timeout_s           = 20
+retries             = 1          # network errors / 5xx only
+retry_backoff_s     = 2
+backoff_on_429_min  = 60
+
+[budget]
+monthly_cap_inr     = 750
+hard_stop_pct       = 90
+warn_at_pct         = [50, 80, 100]
+usd_inr_effective   = 115        # update from your card statement
+ignav_usd_per_call  = 0.002
+ignav_free_calls    = 1000       # tracked so /status shows what's left
+
+[monitoring]
+fail_notify_after   = 3          # consecutive failures before a message
+fail_notify_after_min = 60       # …or this many minutes of errors
+fail_notify_cooldown_min = 60    # at most one failure message per route per window
+daily_summary_at    = "08:30"
+heartbeat_every_min = 30
+backup_at           = "02:00"
+log_level           = "INFO"
+
+[calibration]
+enabled             = true       # the first route you /track becomes the calibration route
+days                = 14
+anchor_every_min    = 30
+compare_intervals_min = [60, 120]  # first = current interval, second = step-down candidate
+min_events          = 5
+max_cache_hit_pct   = 50         # block a 30-min upgrade if re-checks are mostly cached
+
+[ui]
+history_default_n   = 20
+checknow_confirm_above_inr = 1   # ask before /checknow calls costing more than this
