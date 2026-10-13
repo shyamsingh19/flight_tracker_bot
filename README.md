@@ -46,4 +46,3 @@ The bot sends `flightbot-YYYY-MM-DD.db` to you every night. To restore: `sudo sy
 
 ## Tests
 `python3 -m unittest` runs with no network, no Telegram and 0 Ignav calls.
-# flight_tracker_bot
