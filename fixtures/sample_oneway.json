@@ -1,0 +1,205 @@
+{
+ "origin": "HYD",
+ "destination": "DEL",
+ "departure_date": "2026-12-20",
+ "return_date": null,
+ "observed_at": "2026-10-13T08:00:00Z",
+ "cache_hit": false,
+ "itineraries": [
+  {
+   "price": {
+    "amount": 4730,
+    "currency": "INR",
+    "status": "verified"
+   },
+   "outbound": {
+    "carrier": "6E",
+    "duration_minutes": 135,
+    "segments": [
+     {
+      "marketing_carrier_code": "6E",
+      "flight_number": "2134",
+      "operating_carrier_name": null,
+      "departure_airport": "HYD",
+      "departure_time_local": "2026-12-20T06:10:00",
+      "departure_timezone": "Asia/Kolkata",
+      "departure_time_utc": null,
+      "arrival_airport": "DEL",
+      "arrival_time_local": "2026-12-20T08:25:00",
+      "arrival_timezone": "Asia/Kolkata",
+      "arrival_time_utc": null,
+      "duration_minutes": 135,
+      "aircraft": null
+     }
+    ]
+   },
+   "inbound": null,
+   "cabin_class": "economy",
+   "bags": {
+    "carry_on": 1,
+    "checked": 1
+   },
+   "requires_self_transfer": false,
+   "ignav_id": "synthetic-1"
+  },
+  {
+   "price": {
+    "amount": 4890,
+    "currency": "INR",
+    "status": "verified"
+   },
+   "outbound": {
+    "carrier": "AI",
+    "duration_minutes": 135,
+    "segments": [
+     {
+      "marketing_carrier_code": "AI",
+      "flight_number": "559",
+      "operating_carrier_name": null,
+      "departure_airport": "HYD",
+      "departure_time_local": "2026-12-20T09:00:00",
+      "departure_timezone": "Asia/Kolkata",
+      "departure_time_utc": null,
+      "arrival_airport": "DEL",
+      "arrival_time_local": "2026-12-20T11:15:00",
+      "arrival_timezone": "Asia/Kolkata",
+      "arrival_time_utc": null,
+      "duration_minutes": 135,
+      "aircraft": null
+     }
+    ]
+   },
+   "inbound": null,
+   "cabin_class": "economy",
+   "bags": {
+    "carry_on": 1,
+    "checked": 1
+   },
+   "requires_self_transfer": false,
+   "ignav_id": "synthetic-2"
+  },
+  {
+   "price": {
+    "amount": 4420,
+    "currency": "INR",
+    "status": "unverified"
+   },
+   "outbound": {
+    "carrier": "QP",
+    "duration_minutes": 135,
+    "segments": [
+     {
+      "marketing_carrier_code": "QP",
+      "flight_number": "1402",
+      "operating_carrier_name": null,
+      "departure_airport": "HYD",
+      "departure_time_local": "2026-12-20T13:05:00",
+      "departure_timezone": "Asia/Kolkata",
+      "departure_time_utc": null,
+      "arrival_airport": "DEL",
+      "arrival_time_local": "2026-12-20T15:20:00",
+      "arrival_timezone": "Asia/Kolkata",
+      "arrival_time_utc": null,
+      "duration_minutes": 135,
+      "aircraft": null
+     }
+    ]
+   },
+   "inbound": null,
+   "cabin_class": "economy",
+   "bags": {
+    "carry_on": 1,
+    "checked": 0
+   },
+   "requires_self_transfer": false,
+   "ignav_id": "synthetic-3"
+  },
+  {
+   "price": {
+    "amount": 4100,
+    "currency": "INR",
+    "status": "verified"
+   },
+   "outbound": {
+    "carrier": "IX",
+    "duration_minutes": 270,
+    "segments": [
+     {
+      "marketing_carrier_code": "IX",
+      "flight_number": "2913",
+      "operating_carrier_name": null,
+      "departure_airport": "HYD",
+      "departure_time_local": "2026-12-20T05:00:00",
+      "departure_timezone": "Asia/Kolkata",
+      "departure_time_utc": null,
+      "arrival_airport": "BOM",
+      "arrival_time_local": "2026-12-20T07:00:00",
+      "arrival_timezone": "Asia/Kolkata",
+      "arrival_time_utc": null,
+      "duration_minutes": 135,
+      "aircraft": null
+     },
+     {
+      "marketing_carrier_code": "IX",
+      "flight_number": "1121",
+      "operating_carrier_name": null,
+      "departure_airport": "BOM",
+      "departure_time_local": "2026-12-20T08:30:00",
+      "departure_timezone": "Asia/Kolkata",
+      "departure_time_utc": null,
+      "arrival_airport": "DEL",
+      "arrival_time_local": "2026-12-20T10:40:00",
+      "arrival_timezone": "Asia/Kolkata",
+      "arrival_time_utc": null,
+      "duration_minutes": 135,
+      "aircraft": null
+     }
+    ]
+   },
+   "inbound": null,
+   "cabin_class": "economy",
+   "bags": {
+    "carry_on": 1,
+    "checked": 1
+   },
+   "requires_self_transfer": false,
+   "ignav_id": "synthetic-4"
+  },
+  {
+   "price": {
+    "amount": 5300,
+    "currency": "INR",
+    "status": "verified"
+   },
+   "outbound": {
+    "carrier": "SG",
+    "duration_minutes": 135,
+    "segments": [
+     {
+      "marketing_carrier_code": "SG",
+      "flight_number": "8167",
+      "operating_carrier_name": null,
+      "departure_airport": "HYD",
+      "departure_time_local": "2026-12-20T19:40:00",
+      "departure_timezone": "Asia/Kolkata",
+      "departure_time_utc": null,
+      "arrival_airport": "DEL",
+      "arrival_time_local": "2026-12-20T21:55:00",
+      "arrival_timezone": "Asia/Kolkata",
+      "arrival_time_utc": null,
+      "duration_minutes": 135,
+      "aircraft": null
+     }
+    ]
+   },
+   "inbound": null,
+   "cabin_class": "economy",
+   "bags": {
+    "carry_on": 1,
+    "checked": 1
+   },
+   "requires_self_transfer": false,
+   "ignav_id": "synthetic-5"
+  }
+ ]
+}
