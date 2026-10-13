@@ -1,0 +1,377 @@
+{
+ "origin": "HYD",
+ "destination": "GOI",
+ "departure_date": "2026-11-12",
+ "itineraries": [
+  {
+   "price": {
+    "amount": 9010.0,
+    "currency": "INR",
+    "status": "verified"
+   },
+   "outbound": {
+    "carrier": "IndiGo",
+    "duration_minutes": 260,
+    "segments": [
+     {
+      "marketing_carrier_code": "6E",
+      "flight_number": "151",
+      "operating_carrier_name": "IndiGo",
+      "departure_airport": "HYD",
+      "departure_time_local": "2026-11-12T09:25:00",
+      "departure_timezone": "Asia/Kolkata",
+      "departure_time_utc": "2026-11-12T03:55:00Z",
+      "arrival_airport": "BLR",
+      "arrival_time_local": "2026-11-12T10:45:00",
+      "arrival_timezone": "Asia/Kolkata",
+      "arrival_time_utc": "2026-11-12T05:15:00Z",
+      "duration_minutes": 80,
+      "aircraft": "Airbus A321neo"
+     },
+     {
+      "marketing_carrier_code": "6E",
+      "flight_number": "6653",
+      "operating_carrier_name": "IndiGo",
+      "departure_airport": "BLR",
+      "departure_time_local": "2026-11-12T12:25:00",
+      "departure_timezone": "Asia/Kolkata",
+      "departure_time_utc": "2026-11-12T06:55:00Z",
+      "arrival_airport": "GOI",
+      "arrival_time_local": "2026-11-12T13:45:00",
+      "arrival_timezone": "Asia/Kolkata",
+      "arrival_time_utc": "2026-11-12T08:15:00Z",
+      "duration_minutes": 80,
+      "aircraft": "Airbus A321neo"
+     }
+    ]
+   },
+   "cabin_class": "economy",
+   "requires_self_transfer": false,
+   "ignav_id": "e60a183b77594114b2cf2cb264233464"
+  },
+  {
+   "price": {
+    "amount": 9619.0,
+    "currency": "INR",
+    "status": "verified"
+   },
+   "outbound": {
+    "carrier": "IndiGo",
+    "duration_minutes": 450,
+    "segments": [
+     {
+      "marketing_carrier_code": "6E",
+      "flight_number": "314",
+      "operating_carrier_name": "IndiGo",
+      "departure_airport": "HYD",
+      "departure_time_local": "2026-11-12T14:45:00",
+      "departure_timezone": "Asia/Kolkata",
+      "departure_time_utc": "2026-11-12T09:15:00Z",
+      "arrival_airport": "BLR",
+      "arrival_time_local": "2026-11-12T16:05:00",
+      "arrival_timezone": "Asia/Kolkata",
+      "arrival_time_utc": "2026-11-12T10:35:00Z",
+      "duration_minutes": 80,
+      "aircraft": "Airbus A321neo"
+     },
+     {
+      "marketing_carrier_code": "6E",
+      "flight_number": "977",
+      "operating_carrier_name": "IndiGo",
+      "departure_airport": "BLR",
+      "departure_time_local": "2026-11-12T21:00:00",
+      "departure_timezone": "Asia/Kolkata",
+      "departure_time_utc": "2026-11-12T15:30:00Z",
+      "arrival_airport": "GOI",
+      "arrival_time_local": "2026-11-12T22:15:00",
+      "arrival_timezone": "Asia/Kolkata",
+      "arrival_time_utc": "2026-11-12T16:45:00Z",
+      "duration_minutes": 75,
+      "aircraft": "Airbus A321neo"
+     }
+    ]
+   },
+   "cabin_class": "economy",
+   "requires_self_transfer": false,
+   "ignav_id": "fc96c5e4fb7b43beac14d7a180ad2309"
+  },
+  {
+   "price": {
+    "amount": 9891.0,
+    "currency": "INR",
+    "status": "verified"
+   },
+   "outbound": {
+    "carrier": "IndiGo",
+    "duration_minutes": 220,
+    "segments": [
+     {
+      "marketing_carrier_code": "6E",
+      "flight_number": "314",
+      "operating_carrier_name": "IndiGo",
+      "departure_airport": "HYD",
+      "departure_time_local": "2026-11-12T14:45:00",
+      "departure_timezone": "Asia/Kolkata",
+      "departure_time_utc": "2026-11-12T09:15:00Z",
+      "arrival_airport": "BLR",
+      "arrival_time_local": "2026-11-12T16:05:00",
+      "arrival_timezone": "Asia/Kolkata",
+      "arrival_time_utc": "2026-11-12T10:35:00Z",
+      "duration_minutes": 80,
+      "aircraft": "Airbus A321neo"
+     },
+     {
+      "marketing_carrier_code": "6E",
+      "flight_number": "6168",
+      "operating_carrier_name": "IndiGo",
+      "departure_airport": "BLR",
+      "departure_time_local": "2026-11-12T17:10:00",
+      "departure_timezone": "Asia/Kolkata",
+      "departure_time_utc": "2026-11-12T11:40:00Z",
+      "arrival_airport": "GOI",
+      "arrival_time_local": "2026-11-12T18:25:00",
+      "arrival_timezone": "Asia/Kolkata",
+      "arrival_time_utc": "2026-11-12T12:55:00Z",
+      "duration_minutes": 75,
+      "aircraft": "Airbus A320neo"
+     }
+    ]
+   },
+   "cabin_class": "economy",
+   "requires_self_transfer": false,
+   "ignav_id": "8f09dc499582470d9bdb3f2440d7dca2"
+  },
+  {
+   "price": {
+    "amount": 10060.0,
+    "currency": "INR",
+    "status": "verified"
+   },
+   "outbound": {
+    "carrier": "IndiGo",
+    "duration_minutes": 325,
+    "segments": [
+     {
+      "marketing_carrier_code": "6E",
+      "flight_number": "6066",
+      "operating_carrier_name": "IndiGo",
+      "departure_airport": "HYD",
+      "departure_time_local": "2026-11-12T07:15:00",
+      "departure_timezone": "Asia/Kolkata",
+      "departure_time_utc": "2026-11-12T01:45:00Z",
+      "arrival_airport": "BLR",
+      "arrival_time_local": "2026-11-12T08:35:00",
+      "arrival_timezone": "Asia/Kolkata",
+      "arrival_time_utc": "2026-11-12T03:05:00Z",
+      "duration_minutes": 80,
+      "aircraft": "Airbus A321neo"
+     },
+     {
+      "marketing_carrier_code": "6E",
+      "flight_number": "6583",
+      "operating_carrier_name": "IndiGo",
+      "departure_airport": "BLR",
+      "departure_time_local": "2026-11-12T11:20:00",
+      "departure_timezone": "Asia/Kolkata",
+      "departure_time_utc": "2026-11-12T05:50:00Z",
+      "arrival_airport": "GOI",
+      "arrival_time_local": "2026-11-12T12:40:00",
+      "arrival_timezone": "Asia/Kolkata",
+      "arrival_time_utc": "2026-11-12T07:10:00Z",
+      "duration_minutes": 80,
+      "aircraft": "Airbus A321neo"
+     }
+    ]
+   },
+   "cabin_class": "economy",
+   "requires_self_transfer": false,
+   "ignav_id": "60cc16a755694e3880ca6054225f93d5"
+  },
+  {
+   "price": {
+    "amount": 10480.0,
+    "currency": "INR",
+    "status": "verified"
+   },
+   "outbound": {
+    "carrier": "IndiGo",
+    "duration_minutes": 270,
+    "segments": [
+     {
+      "marketing_carrier_code": "6E",
+      "flight_number": "887",
+      "operating_carrier_name": "IndiGo",
+      "departure_airport": "HYD",
+      "departure_time_local": "2026-11-12T08:10:00",
+      "departure_timezone": "Asia/Kolkata",
+      "departure_time_utc": "2026-11-12T02:40:00Z",
+      "arrival_airport": "BLR",
+      "arrival_time_local": "2026-11-12T09:35:00",
+      "arrival_timezone": "Asia/Kolkata",
+      "arrival_time_utc": "2026-11-12T04:05:00Z",
+      "duration_minutes": 85,
+      "aircraft": "Airbus A320neo"
+     },
+     {
+      "marketing_carrier_code": "6E",
+      "flight_number": "6583",
+      "operating_carrier_name": "IndiGo",
+      "departure_airport": "BLR",
+      "departure_time_local": "2026-11-12T11:20:00",
+      "departure_timezone": "Asia/Kolkata",
+      "departure_time_utc": "2026-11-12T05:50:00Z",
+      "arrival_airport": "GOI",
+      "arrival_time_local": "2026-11-12T12:40:00",
+      "arrival_timezone": "Asia/Kolkata",
+      "arrival_time_utc": "2026-11-12T07:10:00Z",
+      "duration_minutes": 80,
+      "aircraft": "Airbus A321neo"
+     }
+    ]
+   },
+   "cabin_class": "economy",
+   "requires_self_transfer": false,
+   "ignav_id": "f5bb1d5dd88d4e008a81d13e6a356b67"
+  },
+  {
+   "price": {
+    "amount": 10699.0,
+    "currency": "INR",
+    "status": "verified"
+   },
+   "outbound": {
+    "carrier": "IndiGo",
+    "duration_minutes": 245,
+    "segments": [
+     {
+      "marketing_carrier_code": "6E",
+      "flight_number": "6405",
+      "operating_carrier_name": "IndiGo",
+      "departure_airport": "HYD",
+      "departure_time_local": "2026-11-12T13:25:00",
+      "departure_timezone": "Asia/Kolkata",
+      "departure_time_utc": "2026-11-12T07:55:00Z",
+      "arrival_airport": "BLR",
+      "arrival_time_local": "2026-11-12T14:45:00",
+      "arrival_timezone": "Asia/Kolkata",
+      "arrival_time_utc": "2026-11-12T09:15:00Z",
+      "duration_minutes": 80,
+      "aircraft": "Airbus A321neo"
+     },
+     {
+      "marketing_carrier_code": "6E",
+      "flight_number": "6753",
+      "operating_carrier_name": "IndiGo",
+      "departure_airport": "BLR",
+      "departure_time_local": "2026-11-12T16:10:00",
+      "departure_timezone": "Asia/Kolkata",
+      "departure_time_utc": "2026-11-12T10:40:00Z",
+      "arrival_airport": "GOI",
+      "arrival_time_local": "2026-11-12T17:30:00",
+      "arrival_timezone": "Asia/Kolkata",
+      "arrival_time_utc": "2026-11-12T12:00:00Z",
+      "duration_minutes": 80,
+      "aircraft": "Airbus A321neo"
+     }
+    ]
+   },
+   "cabin_class": "economy",
+   "requires_self_transfer": false,
+   "ignav_id": "d61d0776c3b94948a8ff05464ae9043a"
+  },
+  {
+   "price": {
+    "amount": 10699.0,
+    "currency": "INR",
+    "status": "verified"
+   },
+   "outbound": {
+    "carrier": "IndiGo",
+    "duration_minutes": 255,
+    "segments": [
+     {
+      "marketing_carrier_code": "6E",
+      "flight_number": "6417",
+      "operating_carrier_name": "IndiGo",
+      "departure_airport": "HYD",
+      "departure_time_local": "2026-11-12T18:00:00",
+      "departure_timezone": "Asia/Kolkata",
+      "departure_time_utc": "2026-11-12T12:30:00Z",
+      "arrival_airport": "BLR",
+      "arrival_time_local": "2026-11-12T19:20:00",
+      "arrival_timezone": "Asia/Kolkata",
+      "arrival_time_utc": "2026-11-12T13:50:00Z",
+      "duration_minutes": 80,
+      "aircraft": "Airbus A320neo"
+     },
+     {
+      "marketing_carrier_code": "6E",
+      "flight_number": "977",
+      "operating_carrier_name": "IndiGo",
+      "departure_airport": "BLR",
+      "departure_time_local": "2026-11-12T21:00:00",
+      "departure_timezone": "Asia/Kolkata",
+      "departure_time_utc": "2026-11-12T15:30:00Z",
+      "arrival_airport": "GOI",
+      "arrival_time_local": "2026-11-12T22:15:00",
+      "arrival_timezone": "Asia/Kolkata",
+      "arrival_time_utc": "2026-11-12T16:45:00Z",
+      "duration_minutes": 75,
+      "aircraft": "Airbus A321neo"
+     }
+    ]
+   },
+   "cabin_class": "economy",
+   "requires_self_transfer": false,
+   "ignav_id": "93fb201d7d0447618a1ab3fa1e08448e"
+  },
+  {
+   "price": {
+    "amount": 15223.0,
+    "currency": "INR",
+    "status": "verified"
+   },
+   "outbound": {
+    "carrier": "IndiGo",
+    "duration_minutes": 595,
+    "segments": [
+     {
+      "marketing_carrier_code": "6E",
+      "flight_number": "285",
+      "operating_carrier_name": "IndiGo",
+      "departure_airport": "HYD",
+      "departure_time_local": "2026-11-12T21:35:00",
+      "departure_timezone": "Asia/Kolkata",
+      "departure_time_utc": "2026-11-12T16:05:00Z",
+      "arrival_airport": "BLR",
+      "arrival_time_local": "2026-11-12T22:55:00",
+      "arrival_timezone": "Asia/Kolkata",
+      "arrival_time_utc": "2026-11-12T17:25:00Z",
+      "duration_minutes": 80,
+      "aircraft": "Airbus A321neo"
+     },
+     {
+      "marketing_carrier_code": "6E",
+      "flight_number": "194",
+      "operating_carrier_name": "IndiGo",
+      "departure_airport": "BLR",
+      "departure_time_local": "2026-11-13T06:10:00",
+      "departure_timezone": "Asia/Kolkata",
+      "departure_time_utc": "2026-11-13T00:40:00Z",
+      "arrival_airport": "GOI",
+      "arrival_time_local": "2026-11-13T07:30:00",
+      "arrival_timezone": "Asia/Kolkata",
+      "arrival_time_utc": "2026-11-13T02:00:00Z",
+      "duration_minutes": 80,
+      "aircraft": "Airbus A321neo"
+     }
+    ]
+   },
+   "cabin_class": "economy",
+   "requires_self_transfer": false,
+   "ignav_id": "7bd66e21158a4de291479a16541523f1"
+  }
+ ],
+ "observed_at": "2026-10-13T10:57:40.388981Z",
+ "cache_hit": false
+}
