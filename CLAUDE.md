@@ -16,6 +16,11 @@ DRY_RUN=1 DB_PATH=dry.db .venv/bin/python bot.py               # run against fix
 
 There is no linter or build step. Dependency: `python-telegram-bot[job-queue]` only; HTTP uses stdlib.
 
+## Workflow
+
+- Run `.venv/bin/python -m unittest` after every change; all must pass.
+- Message text/formatting changes (help, /list, alerts) can't be verified by tests — say so, and check with the DRY_RUN bot in Telegram.
+
 ## Architecture
 
 - `bot.py` — Telegram handlers plus JobQueue jobs (`tick`, heartbeat, daily summary, nightly backup). A `TypeHandler` in group -1 (`gate`) drops every update not from `ALLOWED_USER_ID`. The guided flow (`/start` menu → `/search` ConversationHandler → result buttons → track) uses callback-data prefixes `menu:`, `s:`, `r:`. Blocking work (`checker.run_due`, searches) runs via `asyncio.to_thread`.
