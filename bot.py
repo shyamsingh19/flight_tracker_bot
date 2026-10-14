@@ -37,7 +37,7 @@ HELP = """✈️ Flight price alert
 /search — guided search: city → city → date → track that route + date
 /track HYD DEL 2026-12-20 [flex=5] [target=4500] [stops=0] [airline=6E] [flight=6E2134] [time=06-12] [bags=1] [every=120] [force]
 /list · /history id · /status
-/checknow id [all] · /settarget [id] [4500|off]
+/checknow id [all] · /settarget [id] [4500 [buffer]|off]
 /pause id · /resume id · /delete id
 /reload — re-read config.toml and show the projected cost"""
 
@@ -76,7 +76,8 @@ def route_line(r, now):
     if r["alt_date"] and (a := latest_any(r["id"], r["alt_date"])):
         parts.append(f"alt {day_label(r['alt_date'])} {inr(a['price_inr'])} ({age(a['observed_at'], now)} ago)")
     if r["target_inr"]:
-        parts.append(f"target {inr(r['target_inr'])}")
+        buf = r["target_buffer_inr"]
+        parts.append(f"target {inr(r['target_inr'])}" + (f" +{inr(buf)}" if buf is not None else ""))
     if r["consecutive_failures"]:
         parts.append(f"⚠️ {r['consecutive_failures']} failures")
     return " · ".join(parts)
@@ -221,12 +222,13 @@ async def target_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                       if live else "🔔 No routes yet. Track one from 🔍 Flight Search first.")
             return ConversationHandler.END
         if args:
-            await say(update, set_target(r, args[0]))
+            await say(update, set_target(r, " ".join(args)))
             return ConversationHandler.END
     ctx.user_data["target_rid"] = r["id"]
     await update.effective_message.reply_text(
-        f"🎯 {route_line(r, now_utc())}\n\nSend the target price in ₹ (e.g. 8000), or \"off\" to remove it. "
-        f"You'll be alerted at or below target + {inr(cfg_of(ctx)['deal']['target_buffer_inr'])}.")
+        f"🎯 {route_line(r, now_utc())}\n\nSend the target price in ₹ (e.g. 8000), optionally with a buffer "
+        f"(e.g. 8000 500 alerts at or below ₹8,500; default buffer {inr(cfg_of(ctx)['deal']['target_buffer_inr'])}), "
+        f"or \"off\" to remove it.")
     return TARGET
 
 
@@ -234,18 +236,23 @@ async def target_value(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     r = db.route(ctx.user_data.get("target_rid", 0))
     if not r:
         return ConversationHandler.END
-    text = set_target(r, update.message.text.strip().replace(",", "").lstrip("₹"))
+    text = set_target(r, update.message.text)
     await say(update, text)
     return TARGET if text.startswith("❓") else ConversationHandler.END
 
 
-def set_target(r, arg):
-    arg = arg.lower()
-    if not (arg == "off" or arg.isdigit()):
-        return "❓ Send a price like 8000, or \"off\"."
-    target = None if arg == "off" else int(arg)
-    db.update_route(r["id"], target_inr=target)
-    return f"🎯 #{r['id']} target → {inr(target) if target else 'off'}"
+def set_target(r, text):
+    """'8000', '₹8,000 500', '8000 +500' or 'off' → reply text. No buffer given = [deal] default."""
+    nums = text.lower().replace(",", "").replace("₹", "").replace("+", " ").split()
+    if nums == ["off"]:
+        db.update_route(r["id"], target_inr=None, target_buffer_inr=None)
+        return f"🎯 #{r['id']} target → off"
+    if not (1 <= len(nums) <= 2 and all(n.isdigit() for n in nums)):
+        return "❓ Send a price like 8000, a price and buffer like 8000 500, or \"off\"."
+    target, buf = int(nums[0]), int(nums[1]) if len(nums) > 1 else None
+    db.update_route(r["id"], target_inr=target, target_buffer_inr=buf)
+    return (f"🎯 #{r['id']} target → {inr(target)}"
+            + (f", alerts at or below {inr(target + buf)}" if buf is not None else " (default buffer)"))
 
 
 async def cmd_history(update: Update, ctx: ContextTypes.DEFAULT_TYPE):

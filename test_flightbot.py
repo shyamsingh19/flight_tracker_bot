@@ -228,12 +228,16 @@ class TestRules(Base):
         self.assertFalse(self.check(rid, D, 4500 + self.cfg["deal"]["target_buffer_inr"] + 1, at("2026-12-01", 9)))
         msg = self.check(rid, D, 4600, at("2026-12-01", 10))
         self.assertIn("₹100 above your target ₹4,500", msg[0])
+        db.update_route(rid, target_buffer_inr=0)  # per-route buffer beats the config default
+        self.assertFalse(self.check(rid, D, 4501, at("2026-12-01", 11)))
 
     def test_set_target(self):
         rid = self.route()
         self.assertIn("❓", bot.set_target(db.route(rid), "abc"))
         self.assertIn("₹8,000", bot.set_target(db.route(rid), "8000"))
         self.assertEqual(db.route(rid)["target_inr"], 8000)
+        self.assertIn("at or below ₹8,500", bot.set_target(db.route(rid), "₹8,000 +500"))
+        self.assertEqual(db.route(rid)["target_buffer_inr"], 500)
         bot.set_target(db.route(rid), "OFF")
         self.assertIsNone(db.route(rid)["target_inr"])
 

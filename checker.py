@@ -260,7 +260,8 @@ def check(cfg, r, day, kind, now, quiet=False):
     ctx = context(cfg, r, day, now)
     oid = save(obs)
     is_anchor = day == r["anchor_date"]
-    fired = alerts.decide(cfg, now, is_anchor=is_anchor, price=obs["price_inr"], target=r["target_inr"], **ctx)
+    fired = alerts.decide(cfg, now, is_anchor=is_anchor, price=obs["price_inr"], target=r["target_inr"],
+                           target_buffer=r["target_buffer_inr"], **ctx)
     if not fired:
         return msgs
     d = cfg["deal"]

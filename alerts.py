@@ -11,7 +11,8 @@ When you get an alert (every number is a [deal] key in config.toml; D = your dat
   💡 CHEAPER DATE       A date other than D is cheaper than D's latest price (no older than
                         freshness_h) by alt_cheaper_abs_inr or alt_cheaper_pct, whichever is larger.
                         Once per date per alt_realert_h, unless the saving grows by alt_realert_abs_inr.
-  🎯 TARGET             Any date. Price ≤ your target + target_buffer_inr. Repeats only on a further
+  🎯 TARGET             Any date. Price ≤ your target + buffer (/settarget id price buffer, else
+                        target_buffer_inr). Repeats only on a further
                         realert_abs_inr AND realert_pct fall.
 
 API calls: deciding costs nothing; rules only read prices already fetched by the schedule.
@@ -43,7 +44,7 @@ def further_drop(cfg, last, price):
     return last - price >= d["realert_abs_inr"] and (last - price) * 100 / last >= d["realert_pct"]
 
 
-def decide(cfg, now, *, is_anchor, price, target, low24, d_latest, baseline, last_grade, last_target,
+def decide(cfg, now, *, is_anchor, price, target, target_buffer=None, low24, d_latest, baseline, last_grade, last_target,
            last_alt, **_):
     """Rules that fire for a just-fetched price → [{"rule", "saving", "pct"}]."""
     d = cfg["deal"]
@@ -61,7 +62,8 @@ def decide(cfg, now, *, is_anchor, price, target, low24, d_latest, baseline, las
                 last_alt is None or now - last_alt[1] >= timedelta(hours=d["alt_realert_h"])
                 or saving - last_alt[0] >= d["alt_realert_abs_inr"]):
             out.append({"rule": "alt", "saving": saving})
-    if target and price <= target + d["target_buffer_inr"] and (
+    buf = d["target_buffer_inr"] if target_buffer is None else target_buffer
+    if target and price <= target + buf and (
             last_target is None or further_drop(cfg, last_target, price)):
         out.append({"rule": "target", "saving": target - price})
     return out

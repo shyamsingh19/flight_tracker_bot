@@ -53,7 +53,7 @@ Only the origin, destination and date are required.
 |---|---|
 | `/list` | All routes with their ids (`#3`) |
 | `/history 3` | The last 20 prices seen for route 3 |
-| `/settarget 3 4200` / `/settarget 3 off` | Change or remove the target price. `/settarget` alone (or 🎯 Target in My Alerts) asks for the price; the id can be left out when you track one route |
+| `/settarget 3 4200` / `/settarget 3 off` | Change or remove the target price. `/settarget 3 8000 500` also sets this route's buffer (alert at ≤ ₹8,500). `/settarget` alone (or 🎯 Target in My Alerts) asks for the price; the id can be left out when you track one route |
 | `/pause 3` / `/resume 3` | Stop or restart checks. A paused route costs nothing |
 | `/delete 3` | Remove the route |
 | `/checknow 3` | Check D right now (1 call) |

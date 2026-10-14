@@ -10,7 +10,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS routes(
   id INTEGER PRIMARY KEY, origin TEXT NOT NULL, destination TEXT NOT NULL, anchor_date TEXT NOT NULL,
   flex_days INTEGER NOT NULL, alt_date TEXT, airline TEXT, flight_no TEXT, max_stops INTEGER,
-  time_start INTEGER, time_end INTEGER, min_bags INTEGER, target_inr INTEGER, anchor_every_min INTEGER,
+  time_start INTEGER, time_end INTEGER, min_bags INTEGER, target_inr INTEGER, target_buffer_inr INTEGER, anchor_every_min INTEGER,
   calibration INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL,
   last_anchor_at TEXT, last_scan_at TEXT, last_alt_at TEXT, skip_next_scan INTEGER NOT NULL DEFAULT 0,
   last_burst_at TEXT, consecutive_failures INTEGER NOT NULL DEFAULT 0, first_failure_at TEXT,
@@ -52,6 +52,8 @@ def init():
         c.executescript(SCHEMA)
         if "arr_local" not in {r[1] for r in c.execute("PRAGMA table_info(observations)")}:
             c.execute("ALTER TABLE observations ADD COLUMN arr_local TEXT")  # databases from before 2026-10-13
+        if "target_buffer_inr" not in {r[1] for r in c.execute("PRAGMA table_info(routes)")}:
+            c.execute("ALTER TABLE routes ADD COLUMN target_buffer_inr INTEGER")  # NULL = [deal] default
 
 
 def q(sql, args=()):
