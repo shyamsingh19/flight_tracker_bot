@@ -24,7 +24,7 @@ far_out_slowdown    = 3          # ×3 slower beyond far_out_days
 min_interval_min    = 15         # floor for any per-route interval
 
 [route_defaults]
-flex_days           = 3          # buffer D±N for the daily scan
+flex_days           = 2          # buffer D±N for the daily scan
 max_flex_days       = 7          # reject /track flex= above this
 burst_flex_days     = 5          # D±N searched immediately on a good deal (5 or 7)
 burst_cooldown_h    = 12

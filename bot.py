@@ -207,10 +207,12 @@ TARGET = 3  # conversation state: waiting for the target price
 
 async def target_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """/settarget [id] [price|off], or the 🎯 button: asks for whatever is missing."""
-    if q := update.callback_query:
+    if (q := update.callback_query) and q.data.startswith("t:"):
         await q.answer()
         r = db.route(int(q.data.split(":")[1]))
     else:
+        if q:  # ☰ menu button: same as a bare /settarget
+            await q.answer()
         args = ctx.args or []
         live = {x["id"]: x for x in db.q("SELECT * FROM routes WHERE status IN ('active','paused') ORDER BY id")}
         if args and args[0].isdigit() and int(args[0]) in live:
@@ -408,7 +410,8 @@ def parse_day(text, today):
 
 
 MENU = Kb([[Btn("🔍 Flight Search", callback_data="menu:search"), Btn("🔔 My Alerts", callback_data="menu:alerts")],
-           [Btn("📊 Status", callback_data="menu:status"), Btn("❓ Help", callback_data="menu:help")]])
+           [Btn("🎯 Set Target", callback_data="menu:target"), Btn("📊 Status", callback_data="menu:status")],
+           [Btn("❓ Help", callback_data="menu:help")]])
 
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -640,7 +643,9 @@ async def on_error(update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def post_init(app):
     await app.bot.set_my_commands([BotCommand("start", "Menu"), BotCommand("search", "Guided flight search"),
-                                   BotCommand("list", "My price alerts"), BotCommand("status", "Health and spend"),
+                                   BotCommand("list", "My price alerts"),
+                                   BotCommand("settarget", "Set a target price (+ buffer)"),
+                                   BotCommand("status", "Health and spend"),
                                    BotCommand("help", "All commands")])
     await app.bot.send_message(int(os.environ["ALLOWED_USER_ID"]),
                                f"🟢 Bot started. {projection_text(app.bot_data['cfg'], now_utc())}")
@@ -671,7 +676,7 @@ def build_app(cfg, token):
                 DAY: [MessageHandler(text, search_day)]},
         fallbacks=[CommandHandler("cancel", search_cancel)], allow_reentry=True))
     app.add_handler(ConversationHandler(
-        entry_points=[CommandHandler("settarget", target_start), CallbackQueryHandler(target_start, r"^t:\d+$")],
+        entry_points=[CommandHandler("settarget", target_start), CallbackQueryHandler(target_start, r"^(t:\d+|menu:target)$")],
         states={TARGET: [MessageHandler(text, target_value)]},
         fallbacks=[CommandHandler("cancel", search_cancel)], allow_reentry=True))
     app.add_handler(CallbackQueryHandler(menu_button, "^menu:"))

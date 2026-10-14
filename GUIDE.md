@@ -15,7 +15,8 @@ Send `/start` to get four buttons:
 | Button | What it does |
 |---|---|
 | 🔍 Flight Search | Asks for the departure city, the destination and the date, then shows the cheapest flights. **Costs one call.** |
-| 🔔 My Alerts | Lists your tracked routes, with Delete and Pause/Resume buttons |
+| 🔔 My Alerts | Lists your tracked routes, with Delete, 🎯 Target and Pause/Resume buttons |
+| 🎯 Set Target | Asks for a target price (and optional buffer); asks which route first if you track several |
 | 📊 Status | Shows API health, money spent this month, free calls left and calibration progress |
 | ❓ Help | Lists the commands |
 
