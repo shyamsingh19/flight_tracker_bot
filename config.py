@@ -190,7 +190,7 @@ def load_env(path=".env"):
             os.environ[k.strip()] = v.strip().strip("'\"")
 
 
-# ---- projected cost (plan §5): everything below is derived from the config ----
+# ---- projected cost: everything below is derived from the config ----
 
 def day_slots(start_min, every_min, end_min):
     return list(range(start_min, end_min + 1, every_min)) if every_min > 0 else []

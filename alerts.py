@@ -1,4 +1,4 @@
-"""Pure alert rules (plan §4.4) and message text. No I/O."""
+"""Pure alert rules and message text. No I/O."""
 import statistics
 from datetime import date, timedelta
 

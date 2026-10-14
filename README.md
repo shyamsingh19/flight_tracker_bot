@@ -1,6 +1,6 @@
 # Flight price alert
 
-A single-user Telegram bot that watches domestic Indian fares through the Ignav API. The full design is in [implementation_plan.md](implementation_plan.md).
+A single-user Telegram bot that watches domestic Indian fares through the Ignav API. For a walkthrough of using and configuring it, see [GUIDE.md](GUIDE.md).
 
 ## Files
 | File | Role |

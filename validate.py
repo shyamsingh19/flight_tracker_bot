@@ -1,4 +1,4 @@
-"""Phase 1 (plan §6): live Ignav checks that also save real responses as test fixtures.
+"""Phase 1: live Ignav checks that also save real responses as test fixtures.
 
     python validate.py              # HYD → DEL/BOM/BLR/GOI/CCU, 30 days out (5 calls)
     python validate.py --cache-test # HYD→DEL same date at 0/15/30/60 min (4 calls, ~1 h)

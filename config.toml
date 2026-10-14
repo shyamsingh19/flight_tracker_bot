@@ -1,4 +1,4 @@
-# Flight price alert — every tunable number lives here (plan §4.2a).
+# Flight price alert — every tunable number lives here.
 # Secrets go in .env. Edit, then send /reload: the bot validates the file and
 # replies with the projected monthly cost. An invalid file is rejected and the
 # previous config stays active.

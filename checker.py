@@ -1,4 +1,4 @@
-"""Scheduled checks (plan §4.3): anchor date D, buffer scan, alternative watch, burst, calibration.
+"""Scheduled checks: anchor date D, buffer scan, alternative watch, burst, calibration.
 Runs in a worker thread; every function returns the Telegram messages to send."""
 import html
 import logging
@@ -314,7 +314,7 @@ def check_now(cfg, rid, dates, now=None):
     return msgs
 
 
-# ---------------------------------------------------------------- calibration (plan §4.6, §5.1)
+# ---------------------------------------------------------------- calibration
 
 def calibration_series(cfg, r):
     end = iso(parse(r["created_at"]) + timedelta(days=cfg["calibration"]["days"]))

@@ -1,4 +1,4 @@
-"""Ignav one-way search → offers. The only data source (plan §2); swap this file to change provider."""
+"""Ignav one-way search → offers. The only data source; swap this file to change provider."""
 import json
 import os
 import random
