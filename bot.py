@@ -33,13 +33,31 @@ warnings.filterwarnings("ignore", message=".*per_message=False.*", category=PTBU
 CONFIG_PATH = os.environ.get("CONFIG_PATH", "config.toml")
 log = logging.getLogger("bot")
 
-HELP = """✈️ Flight price alert
-/search — guided search: city → city → date → track that route + date
-/track HYD DEL 2026-12-20 [flex=5] [target=4500] [stops=0] [airline=6E] [flight=6E2134] [time=06-12] [bags=1] [every=120] [force]
-/list · /history id · /status
-/checknow id [all] · /settarget [id] [4500 [buffer]|off]
-/pause id · /resume id · /delete id
-/reload — re-read config.toml and show the projected cost"""
+HELP = """✈️ <b>Flight price alert</b>
+
+🔍 <b>Find &amp; track</b>
+/search — guided: city → city → date → track
+/track <code>HYD DEL 2026-12-20</code> — track directly
+<i>Optional extras for /track:</i>
+  <code>flex=5</code> — also watch ±5 days
+  <code>target=4500</code> — alert at or below ₹4500
+  <code>stops=0</code> — max stops
+  <code>airline=6E</code> · <code>flight=6E2134</code>
+  <code>time=06-12</code> — departure window (hours)
+  <code>bags=1</code> — checked bags
+  <code>every=120</code> — check every 120 min
+  <code>force</code> — allow over the cost cap
+
+📋 <b>Your routes</b>
+/list — all tracked routes
+/history <code>id</code> — price history
+/checknow <code>id</code> [all] — check right now
+/settarget [<code>id</code>] <code>4500</code> [buffer] · <code>off</code>
+/pause · /resume · /delete <code>id</code>
+
+⚙️ <b>System</b>
+/status — health and spend
+/reload — re-read config, show projected cost"""
 
 
 class JsonLog(logging.Formatter):
@@ -105,7 +123,7 @@ async def say(update, text):
 # ---------------------------------------------------------------- commands
 
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await say(update, html.escape(HELP))
+    await say(update, HELP)
 
 
 def parse_track(cfg, args, today):
@@ -428,7 +446,7 @@ async def menu_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif what == "status":
         await q.message.reply_text(status_text(cfg_of(ctx), now_utc()))
     elif what == "help":
-        await q.message.reply_text(html.escape(HELP))
+        await q.message.reply_text(HELP)
     else:
         await q.message.reply_text("✈️ Alright, please choose what we will do 👇", reply_markup=MENU)
 
