@@ -24,7 +24,7 @@ far_out_slowdown    = 3          # ×3 slower beyond far_out_days
 min_interval_min    = 15         # floor for any per-route interval
 
 [route_defaults]
-flex_days           = 5          # buffer D±N for the daily scan
+flex_days           = 3          # buffer D±N for the daily scan
 max_flex_days       = 7          # reject /track flex= above this
 burst_flex_days     = 5          # D±N searched immediately on a good deal (5 or 7)
 burst_cooldown_h    = 12
@@ -48,6 +48,7 @@ near_tie_inr        = 200        # alternative watch: within abs or pct of D
 near_tie_pct        = 3
 recheck_unverified  = true       # re-check unverified/cached prices before alerting
 recheck_tolerance_pct = 2        # alert only if the re-check is within this
+target_buffer_inr   = 300        # 🎯 alert once the price is at or below target + this
 
 [provider]                       # Ignav client behaviour
 timeout_s           = 20

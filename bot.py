@@ -37,7 +37,7 @@ HELP = """✈️ Flight price alert
 /search — guided search: city → city → date → track that route + date
 /track HYD DEL 2026-12-20 [flex=5] [target=4500] [stops=0] [airline=6E] [flight=6E2134] [time=06-12] [bags=1] [every=120] [force]
 /list · /history id · /status
-/checknow id [all] · /settarget id 4500|off
+/checknow id [all] · /settarget [id] [4500|off]
 /pause id · /resume id · /delete id
 /reload — re-read config.toml and show the projected cost"""
 
@@ -201,14 +201,51 @@ async def cmd_resume(update, ctx):
     await set_status(update, ctx, "active")
 
 
-async def cmd_settarget(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    r = get_route(ctx)
-    arg = ctx.args[1].lower() if r and len(ctx.args) > 1 else ""
+TARGET = 3  # conversation state: waiting for the target price
+
+
+async def target_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/settarget [id] [price|off], or the 🎯 button: asks for whatever is missing."""
+    if q := update.callback_query:
+        await q.answer()
+        r = db.route(int(q.data.split(":")[1]))
+    else:
+        args = ctx.args or []
+        live = {x["id"]: x for x in db.q("SELECT * FROM routes WHERE status IN ('active','paused') ORDER BY id")}
+        if args and args[0].isdigit() and int(args[0]) in live:
+            r, args = live[int(args[0])], args[1:]
+        elif len(live) == 1 and len(args) < 2:  # "/settarget 8000" with a single route
+            r = next(iter(live.values()))
+        else:
+            await say(update, "Which route? Send /settarget id, e.g. /settarget 3 (ids are in /list)."
+                      if live else "🔔 No routes yet. Track one from 🔍 Flight Search first.")
+            return ConversationHandler.END
+        if args:
+            await say(update, set_target(r, args[0]))
+            return ConversationHandler.END
+    ctx.user_data["target_rid"] = r["id"]
+    await update.effective_message.reply_text(
+        f"🎯 {route_line(r, now_utc())}\n\nSend the target price in ₹ (e.g. 8000), or \"off\" to remove it. "
+        f"You'll be alerted at or below target + {inr(cfg_of(ctx)['deal']['target_buffer_inr'])}.")
+    return TARGET
+
+
+async def target_value(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    r = db.route(ctx.user_data.get("target_rid", 0))
+    if not r:
+        return ConversationHandler.END
+    text = set_target(r, update.message.text.strip().replace(",", "").lstrip("₹"))
+    await say(update, text)
+    return TARGET if text.startswith("❓") else ConversationHandler.END
+
+
+def set_target(r, arg):
+    arg = arg.lower()
     if not (arg == "off" or arg.isdigit()):
-        return await say(update, "Usage: /settarget id 4500|off")
+        return "❓ Send a price like 8000, or \"off\"."
     target = None if arg == "off" else int(arg)
     db.update_route(r["id"], target_inr=target)
-    await say(update, f"#{r['id']} target → {inr(target) if target else 'off'}")
+    return f"🎯 #{r['id']} target → {inr(target) if target else 'off'}"
 
 
 async def cmd_history(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -519,6 +556,7 @@ def alerts_view(now):
     if not rows:
         return "🔔 No price alerts yet.", Kb([[Btn("🔍 Flight Search", callback_data="menu:search")]])
     kb = [[Btn(f"❌ Delete #{r['id']}", callback_data=f"r:deleted:{r['id']}"),
+           Btn(f"🎯 Target #{r['id']}", callback_data=f"t:{r['id']}"),
            Btn(f"⏸ Pause #{r['id']}" if r["status"] == "active" else f"▶️ Resume #{r['id']}",
                callback_data=f"r:{'paused' if r['status'] == 'active' else 'active'}:{r['id']}")] for r in rows]
     return "🔔 Your price alerts:\n\n" + "\n\n".join(route_line(r, now) for r in rows), Kb(kb)
@@ -625,12 +663,16 @@ def build_app(cfg, token):
         states={ORIGIN: [MessageHandler(text, search_origin)], DEST: [MessageHandler(text, search_dest)],
                 DAY: [MessageHandler(text, search_day)]},
         fallbacks=[CommandHandler("cancel", search_cancel)], allow_reentry=True))
+    app.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("settarget", target_start), CallbackQueryHandler(target_start, r"^t:\d+$")],
+        states={TARGET: [MessageHandler(text, target_value)]},
+        fallbacks=[CommandHandler("cancel", search_cancel)], allow_reentry=True))
     app.add_handler(CallbackQueryHandler(menu_button, "^menu:"))
     app.add_handler(CallbackQueryHandler(search_button, "^s:"))
     app.add_handler(CallbackQueryHandler(route_button, "^r:"))
     for name, fn in [("start", cmd_start), ("help", cmd_help), ("track", cmd_track), ("list", cmd_list),
                      ("delete", cmd_delete), ("pause", cmd_pause), ("resume", cmd_resume),
-                     ("settarget", cmd_settarget), ("history", cmd_history), ("checknow", cmd_checknow),
+                     ("history", cmd_history), ("checknow", cmd_checknow),
                      ("reload", cmd_reload), ("status", cmd_status)]:
         app.add_handler(CommandHandler(name, fn))
     app.add_error_handler(on_error)

@@ -223,7 +223,7 @@ def context(cfg, r, day, now):
     last_alt = db.one("SELECT saving_inr, sent_at FROM alerts WHERE route_id=? AND rule='alt' AND depart_date=? "
                       "ORDER BY id DESC LIMIT 1", (rid, day))
     last_flight = db.one("SELECT o.flight_no FROM alerts a JOIN observations o ON o.id=a.observation_id "
-                         "WHERE a.route_id=? ORDER BY a.id DESC LIMIT 1", (rid,))
+                         "WHERE a.route_id=? AND a.depart_date=? ORDER BY a.id DESC LIMIT 1", (rid, day))
     d_latest = latest(rid, r["anchor_date"], since(d["freshness_h"]))
     everything = [x[0] for x in db.q(f"SELECT o.price_inr FROM observations o JOIN routes r ON r.id=o.route_id "
                                       f"WHERE r.origin=? AND r.destination=? AND o.{PRICED}",

@@ -76,6 +76,7 @@ SCHEMA = {
         "near_tie_pct": (3, float, 0, 100),
         "recheck_unverified": (True, bool),
         "recheck_tolerance_pct": (2, float, 0, 100),
+        "target_buffer_inr": (300, int, 0, 10**6),
     },
     "provider": {
         "timeout_s": (20, float, 1, 120),

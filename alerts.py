@@ -1,4 +1,27 @@
-"""Pure alert rules and message text. No I/O."""
+"""Pure alert rules and message text. No I/O.
+
+When you get an alert (every number is a [deal] key in config.toml; D = your date):
+
+  🟢 GOOD / GREAT DEAL  D only. Price is in the cheapest good_percentile / great_percentile of all
+                        prices seen for D±flex over the last baseline_days. Silent until min_samples
+                        prices exist. Repeats only if GOOD becomes GREAT, or the price falls another
+                        realert_abs_inr AND realert_pct below the last deal alert.
+  📉 DROP               D only. Price is drop_abs_inr AND drop_pct below D's lowest in the last
+                        drop_window_h hours.
+  💡 CHEAPER DATE       A date other than D is cheaper than D's latest price (no older than
+                        freshness_h) by alt_cheaper_abs_inr or alt_cheaper_pct, whichever is larger.
+                        Once per date per alt_realert_h, unless the saving grows by alt_realert_abs_inr.
+  🎯 TARGET             Any date. Price ≤ your target + target_buffer_inr. Repeats only on a further
+                        realert_abs_inr AND realert_pct fall.
+
+API calls: deciding costs nothing; rules only read prices already fetched by the schedule.
+Only two things spend extra calls, and only after a rule has fired:
+  - re-check (1 call): if recheck_unverified and the price was unverified or cached, it is fetched
+    again and the alert is dropped unless the two agree within recheck_tolerance_pct;
+  - burst (one call per date): a deal or target alert on D searches D±burst_flex_days at once, at most
+    every burst_cooldown_h ([route_defaults]), and replaces the next buffer scan when it covers it.
+So looser thresholds mean more messages and more re-checks/bursts; tighten them to save calls.
+"""
 import statistics
 from datetime import date, timedelta
 
@@ -38,7 +61,8 @@ def decide(cfg, now, *, is_anchor, price, target, low24, d_latest, baseline, las
                 last_alt is None or now - last_alt[1] >= timedelta(hours=d["alt_realert_h"])
                 or saving - last_alt[0] >= d["alt_realert_abs_inr"]):
             out.append({"rule": "alt", "saving": saving})
-    if target and price <= target and (last_target is None or further_drop(cfg, last_target, price)):
+    if target and price <= target + d["target_buffer_inr"] and (
+            last_target is None or further_drop(cfg, last_target, price)):
         out.append({"rule": "target", "saving": target - price})
     return out
 
@@ -58,6 +82,11 @@ def gf_link(r, day):
 
 def flight_text(obs):
     return f"{obs['flight_no']} {obs['dep_local'][11:16]}"
+
+
+def target_text(r, p):
+    t = r["target_inr"]
+    return f"below your target {inr(t)}" if p <= t else f"{inr(p - t)} above your target {inr(t)}"
 
 
 def message(cfg, r, day, obs, fired, ctx, nearby=None):
@@ -81,11 +110,11 @@ def message(cfg, r, day, obs, fired, ctx, nearby=None):
         lines.append(f"💡 {head} · {day_label(day)} is {inr(p)}, {inr(rules['alt']['saving'])} less than your "
                      f"date {day_label(r['anchor_date'])} ({inr(ctx['d_latest'])})")
     else:
-        lines.append(f"🎯 {head} {day_label(day)} · {inr(p)}, below your target {inr(r['target_inr'])}")
+        lines.append(f"🎯 {head} {day_label(day)} · {inr(p)}, {target_text(r, p)}")
     if g and "drop" in rules:
         lines.append(f"📉 {inr(rules['drop']['saving'])} below the 24h low {inr(ctx['low24'])}")
     if "target" in rules and len(rules) > 1:
-        lines.append(f"🎯 below your target {inr(r['target_inr'])}")
+        lines.append(f"🎯 {target_text(r, p)}")
 
     bits = [flight_text(obs)]
     if ctx["last_flight"] and ctx["last_flight"] != obs["flight_no"]:

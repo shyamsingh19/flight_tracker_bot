@@ -223,6 +223,20 @@ class TestRules(Base):
         self.assertIn("was AI559", msg[0])
         self.assertIn("lowest ever", msg[0])
 
+    def test_target_buffer(self):
+        rid = self.route(target_inr=4500, flex_days=0)
+        self.assertFalse(self.check(rid, D, 4500 + self.cfg["deal"]["target_buffer_inr"] + 1, at("2026-12-01", 9)))
+        msg = self.check(rid, D, 4600, at("2026-12-01", 10))
+        self.assertIn("₹100 above your target ₹4,500", msg[0])
+
+    def test_set_target(self):
+        rid = self.route()
+        self.assertIn("❓", bot.set_target(db.route(rid), "abc"))
+        self.assertIn("₹8,000", bot.set_target(db.route(rid), "8000"))
+        self.assertEqual(db.route(rid)["target_inr"], 8000)
+        bot.set_target(db.route(rid), "OFF")
+        self.assertIsNone(db.route(rid)["target_inr"])
+
     def test_below_target_realert(self):
         rid = self.route(target_inr=4500, flex_days=0)
         self.assertTrue(self.check(rid, D, 4400, at("2026-12-01", 9)))
@@ -429,7 +443,7 @@ class TestGuidedFlow(Base):
         self.route()
         text, kb = bot.alerts_view(at("2026-12-01", 9))
         self.assertIn("#1 HYD→DEL", text)
-        self.assertEqual([b.callback_data for b in kb.inline_keyboard[0]], ["r:deleted:1", "r:paused:1"])
+        self.assertEqual([b.callback_data for b in kb.inline_keyboard[0]], ["r:deleted:1", "t:1", "r:paused:1"])
 
     def test_app_wiring_builds(self):
         app = bot.build_app(self.cfg, "123:abc")

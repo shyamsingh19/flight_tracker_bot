@@ -53,7 +53,7 @@ Only the origin, destination and date are required.
 |---|---|
 | `/list` | All routes with their ids (`#3`) |
 | `/history 3` | The last 20 prices seen for route 3 |
-| `/settarget 3 4200` / `/settarget 3 off` | Change or remove the target price |
+| `/settarget 3 4200` / `/settarget 3 off` | Change or remove the target price. `/settarget` alone (or 🎯 Target in My Alerts) asks for the price; the id can be left out when you track one route |
 | `/pause 3` / `/resume 3` | Stop or restart checks. A paused route costs nothing |
 | `/delete 3` | Remove the route |
 | `/checknow 3` | Check D right now (1 call) |
@@ -68,7 +68,7 @@ A route expires on its own once its date passes, or, for a `flight=` route, once
 | 🟢 **GOOD / GREAT DEAL** | D's price is in the cheapest 25% (good) or 10% (great) of the prices seen over the last 30 days. It needs at least 20 data points first, so expect no deal alerts in a new route's first day or so |
 | 📉 **Drop** | D fell by at least ₹300 **and** 5% below its lowest price in the last 24 h |
 | 💡 **Cheaper alternative** | A nearby date is cheaper than D by at least ₹300 or 5%, whichever is larger |
-| 🎯 **Target** | The price is at or below your `target=` |
+| 🎯 **Target** | The price is at or below your `target=` plus `[deal] target_buffer_inr` (₹300), so a fare just above target still pings you |
 
 The same deal is not sent twice. The bot re-alerts only if the price falls by another ₹100 and 3%, or the deal upgrades from good to great. A good deal also triggers a **burst**: the bot checks D±5 straight away, so the alert shows nearby prices too.
 
