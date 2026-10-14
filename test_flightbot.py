@@ -445,8 +445,9 @@ class TestGuidedFlow(Base):
 
     def test_alerts_view_buttons(self):
         self.route()
-        text, kb = bot.alerts_view(at("2026-12-01", 9))
-        self.assertIn("#1 HYD→DEL", text)
+        text, kb = bot.alerts_view(self.cfg, at("2026-12-01", 9))
+        self.assertIn("#1 HYD → DEL", text)
+        self.assertIn("← your date", text)
         self.assertEqual([b.callback_data for b in kb.inline_keyboard[0]], ["r:deleted:1", "t:1", "r:paused:1"])
 
     def test_app_wiring_builds(self):

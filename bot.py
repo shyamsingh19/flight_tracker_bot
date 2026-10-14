@@ -101,6 +101,34 @@ def route_line(r, now):
     return " · ".join(parts)
 
 
+def route_card(cfg, r, now):
+    """/list view: every watched date with its latest price, D and the cheapest day marked."""
+    head = f"#{r['id']} {r['origin']} → {r['destination']}"
+    if r["target_inr"]:
+        buf = r["target_buffer_inr"]
+        head += f" · 🎯 {inr(r['target_inr'])}" + (f" (+{inr(buf)})" if buf is not None else "")
+    if r["status"] != "active":
+        head += f" · {r['status']}"
+    if r["consecutive_failures"]:
+        head += f" · ⚠️ {r['consecutive_failures']} failures"
+    days = sorted([r["anchor_date"], *checker.buffer_dates(r["anchor_date"], r["flex_days"],
+                                                           checker.local(cfg, now).date())])
+    obs = {d: latest_any(r["id"], d) for d in days}
+    priced = [o for o in obs.values() if o]
+    best = min(priced, key=lambda o: o["price_inr"])["depart_date"] if priced else None
+    rows = []
+    for d in days:
+        o = obs[d]
+        row = f"{day_label(d)}   {inr(o['price_inr']) if o else '—':<8}"
+        if d == r["anchor_date"]:
+            row += "  ← your date" + (f" · {o['flight_no']}" if o else "")
+        if d == best and len(priced) > 1:
+            row += "  ⭐ cheapest"
+        rows.append(row.rstrip())
+    tail = f"\nupdated {age(max(o['observed_at'] for o in priced), now)} ago" if priced else "\nno prices yet"
+    return f"{head}\n<pre>{html.escape(chr(10).join(rows))}</pre>{tail}"
+
+
 def projection_text(cfg, now):
     lo, hi = checker.projected(cfg, now)
     n = db.one("SELECT COUNT(*) n FROM routes WHERE status='active'")["n"]
@@ -197,7 +225,7 @@ def save_route(cfg, route, force, now):
 
 
 async def cmd_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    text, kb = alerts_view(now_utc())
+    text, kb = alerts_view(cfg_of(ctx), now_utc())
     await say_kb(update, text, kb)
 
 
@@ -441,7 +469,7 @@ async def menu_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     what = q.data.split(":")[1]
     if what == "alerts":
-        text, kb = alerts_view(now_utc())
+        text, kb = alerts_view(cfg_of(ctx), now_utc())
         await q.message.reply_text(text, reply_markup=kb)
     elif what == "status":
         await q.message.reply_text(status_text(cfg_of(ctx), now_utc()))
@@ -579,7 +607,7 @@ def tracked(s):
                   (s["o"], s["d"], s["day"], 0 if s["direct"] else None))
 
 
-def alerts_view(now):
+def alerts_view(cfg, now):
     rows = db.q("SELECT * FROM routes WHERE status IN ('active','paused') ORDER BY id")
     if not rows:
         return "🔔 No price alerts yet.", Kb([[Btn("🔍 Flight Search", callback_data="menu:search")]])
@@ -587,7 +615,7 @@ def alerts_view(now):
            Btn(f"🎯 Target #{r['id']}", callback_data=f"t:{r['id']}"),
            Btn(f"⏸ Pause #{r['id']}" if r["status"] == "active" else f"▶️ Resume #{r['id']}",
                callback_data=f"r:{'paused' if r['status'] == 'active' else 'active'}:{r['id']}")] for r in rows]
-    return "🔔 Your price alerts:\n\n" + "\n\n".join(route_line(r, now) for r in rows), Kb(kb)
+    return "🔔 Your price alerts\n\n" + "\n\n".join(route_card(cfg, r, now) for r in rows), Kb(kb)
 
 
 async def route_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -595,7 +623,7 @@ async def route_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     _, status, rid = q.data.split(":")
     db.update_route(int(rid), status=status)
     await q.answer(f"#{rid} → {status}")
-    text, kb = alerts_view(now_utc())
+    text, kb = alerts_view(cfg_of(ctx), now_utc())
     await q.edit_message_text(text, reply_markup=kb)
 
 
