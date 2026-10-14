@@ -413,14 +413,17 @@ class TestGuidedFlow(Base):
         text, kb = bot.results_view(self.cfg, s)
         self.assertIn("1 stop", text)
         self.assertIn("17:45 → 20:00", text)
-        self.assertEqual(kb.inline_keyboard[0][0].callback_data, "s:f:0")
+        self.assertEqual(kb.inline_keyboard[0][0].callback_data, "s:trk")
         s["direct"] = True
         text, kb = bot.results_view(self.cfg, s)
         self.assertNotIn("6E668", text)
-        self.assertIn("Track AI2880", kb.inline_keyboard[0][0].text)
-        route, _ = bot.parse_track(self.cfg, ["HYD", "DEL", "2026-11-06", "stops=0", "flight=AI2880"], date(2026, 10, 13))
+        route, _ = bot.parse_track(self.cfg, ["HYD", "DEL", "2026-11-06", "stops=0"], date(2026, 10, 13))
         self.assertIn("✅ Tracking #1", bot.save_route(self.cfg, route, False, at("2026-10-13", 15)))
-        self.assertEqual(db.route(1)["flight_no"], "AI2880")
+        _, kb = bot.results_view(self.cfg, s)
+        self.assertEqual((kb.inline_keyboard[0][0].text, kb.inline_keyboard[0][0].callback_data),
+                         ("✅ Tracking #1", "menu:alerts"))
+        s["direct"] = False  # all-flights watch of the same date is a different route
+        self.assertEqual(bot.results_view(self.cfg, s)[1].inline_keyboard[0][0].callback_data, "s:trk")
 
     def test_alerts_view_buttons(self):
         self.route()

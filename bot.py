@@ -34,7 +34,7 @@ CONFIG_PATH = os.environ.get("CONFIG_PATH", "config.toml")
 log = logging.getLogger("bot")
 
 HELP = """✈️ Flight price alert
-/search — guided search: city → city → date → pick a flight to track
+/search — guided search: city → city → date → track that route + date
 /track HYD DEL 2026-12-20 [flex=5] [target=4500] [stops=0] [airline=6E] [flight=6E2134] [time=06-12] [bags=1] [every=120] [force]
 /list · /history id · /status
 /checknow id [all] · /settarget id 4500|off
@@ -477,10 +477,10 @@ def results_view(cfg, s):
             bags = f" · {o['bags']} bag" if o["bags"] else ""
             lines.append(f"\n{i}. ✈️ {o['flight_no']} · {stops}\n    🕐 {o['dep_local'][11:16]}{arr} · <b>{inr(o['price_inr'])}</b>{bags}")
     lines.append("\n" + alerts.gf_link({"origin": s["o"], "destination": s["d"]}, s["day"]))
-    rows = [[Btn(f"🔔 Track {o['flight_no']} · {inr(o['price_inr'])}", callback_data=f"s:f:{i}")]
-            for i, o in enumerate(shown)]
-    rows += [[Btn("🔔 Track cheapest any flight", callback_data="s:trk")],
-             [Btn("🔀 All flights" if s["direct"] else "✈️ Direct only", callback_data="s:direct"),
+    t = tracked(s)
+    rows = [[Btn(f"✅ Tracking #{t['id']}", callback_data="menu:alerts") if t
+             else Btn("🔔 Track prices", callback_data="s:trk")],
+            [Btn("🔀 All flights" if s["direct"] else "✈️ Direct only", callback_data="s:direct"),
               Btn("📅 Change date", callback_data="s:date")],
              [Btn("🔍 New search", callback_data="menu:search"), Btn("☰ Menu", callback_data="menu:main")]]
     return "\n".join(lines), Kb(rows)
@@ -499,13 +499,19 @@ async def search_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         text, kb = results_view(cfg, s)
         await q.edit_message_text(text, reply_markup=kb)
         return
-    flight = None
-    if q.data.startswith("s:f:"):
-        shown = [o for o in s["offers"] if not s["direct"] or o["stops"] == 0]
-        flight = shown[int(q.data.split(":")[2])]["flight_no"]
-    route, _ = parse_track(cfg, [s["o"], s["d"], s["day"]] + (["stops=0"] if s["direct"] else [])
-                           + ([f"flight={flight}"] if flight else []), checker.local(cfg, now).date())
+    if tracked(s):
+        return
+    route, _ = parse_track(cfg, [s["o"], s["d"], s["day"]] + (["stops=0"] if s["direct"] else []),
+                           checker.local(cfg, now).date())
     await q.message.reply_text(save_route(cfg, route, False, now))
+    await q.edit_message_reply_markup(results_view(cfg, s)[1])
+
+
+def tracked(s):
+    """The live route watching this search's route + date (any flight), so one search makes one alert."""
+    return db.one("SELECT id FROM routes WHERE status IN ('active','paused') AND origin=? AND destination=? "
+                  "AND anchor_date=? AND flight_no IS NULL AND max_stops IS ?",
+                  (s["o"], s["d"], s["day"], 0 if s["direct"] else None))
 
 
 def alerts_view(now):

@@ -24,8 +24,7 @@ Send `/start` to get four buttons:
 2. Type the destination the same way.
 3. Type the date in any of these forms: `6 november`, `Nov 6`, `06.11`, `6/11/2026`, `2026-11-06`, `tomorrow`. A date without a year means its next occurrence.
 4. Results show the cheapest flights. Use the buttons under them:
-   - **🔔 Track 6E2134 · ₹4,210**: watch that one flight.
-   - **🔔 Track cheapest any flight**: watch the cheapest fare on that date, whichever airline it is.
+   - **🔔 Track prices**: watch the cheapest fare for that route and date, whichever flight it is. The button turns into **✅ Tracking #N** (tap it to open My Alerts); searching the same route and date again shows it too, so you don't get duplicates. Delete or pause it from 🔔 My Alerts.
    - **✈️ Direct only / 🔀 All flights**: filter the list without making a new call. Tracking while the list is filtered sets `stops=0`.
    - **📅 Change date**: search the same route on another date (one new call).
 
