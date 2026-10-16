@@ -76,14 +76,6 @@ heartbeat_every_min = 30         # how often to ping HEARTBEAT_URL (if set in .e
 backup_at           = "02:00"    # nightly database backup
 log_level           = "INFO"
 
-[calibration]                    # a trial that suggests a good anchor_every_min
-enabled             = true       # the first route you /track is the trial route
-days                = 14         # trial length
-anchor_every_min    = 30         # during the trial, search the travel date this often
-compare_intervals_min = [60, 120]  # intervals to compare: [your current one, a slower one]
-min_events          = 5          # need at least 5 price drops before suggesting a change
-max_cache_hit_pct   = 50         # don't suggest 30 min if most extra searches returned cached prices
-
 [ui]
 history_default_n   = 20         # prices shown by /history
 search_results_n    = 5          # flights shown after a menu search

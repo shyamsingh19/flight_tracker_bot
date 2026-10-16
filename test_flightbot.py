@@ -50,7 +50,6 @@ class Base(unittest.TestCase):
         db.PATH = str(Path(self.tmp.name) / "t.db")
         db.init()
         self.cfg = config.load(HERE / "config.toml")
-        self.cfg["calibration"]["enabled"] = False
         self.fake = checker.search = Fake()
 
     def tearDown(self):
@@ -58,7 +57,7 @@ class Base(unittest.TestCase):
         self.tmp.cleanup()
 
     def route(self, created=None, **kw):
-        r = {"origin": "HYD", "destination": "DEL", "anchor_date": D, "flex_days": 5, "calibration": 0,
+        r = {"origin": "HYD", "destination": "DEL", "anchor_date": D, "flex_days": 5,
              "status": "active", "created_at": db.iso(created or at("2026-12-01", 7))} | kw
         return db.insert("routes", r)
 
@@ -361,42 +360,6 @@ class TestProvider(Base):
                     providers.ignav_search(self.cfg, "HYD", "DEL", D, 1, None)
         finally:
             providers.post = orig
-
-
-class TestCalibration(Base):
-    def series(self, dips_at_min):
-        out = []
-        start = datetime(2026, 12, 1, tzinfo=IST)
-        for day in range(14):
-            for m in range(8 * 60, 23 * 60 + 1, 30):
-                t = start + timedelta(days=day, minutes=m)
-                out.append((t, 5000 if day % 2 == 0 and m == dips_at_min else 6000, False))
-        return out
-
-    def test_missed_half_hour_dips_recommend_30(self):
-        verdict, text = checker.calibration_report(self.cfg, self.series(10 * 60 + 30), 5)
-        self.assertIn("move D to every 30 min", verdict)
-        self.assertIn("7 drop events", text)
-
-    def test_hourly_dips_step_down_or_stay(self):
-        verdict, _ = checker.calibration_report(self.cfg, self.series(10 * 60), 5)  # 10:00 is on the 2 h grid too
-        self.assertIn("step D down to every 120 min", verdict)
-        verdict, _ = checker.calibration_report(self.cfg, self.series(11 * 60), 5)  # 11:00: hourly only
-        self.assertIn("stay at 60 min", verdict)
-
-    def test_not_enough_evidence(self):
-        verdict, _ = checker.calibration_report(self.cfg, self.series(10 * 60 + 30)[:31 * 6], 5)
-        self.assertIn("not enough evidence", verdict)
-
-    def test_calibration_route_runs_every_30_min(self):
-        self.cfg["calibration"]["enabled"] = True
-        rid = self.route(calibration=1, flex_days=0)
-        checker.run_due(self.cfg, at("2026-12-01", 9))
-        checker.run_due(self.cfg, at("2026-12-01", 9, 30))
-        self.assertEqual(len(self.fake.calls), 2)
-        self.assertIn("Calibration report", checker.run_due(self.cfg, at("2026-12-15", 9))[-1])  # after 14 days
-        self.assertEqual(checker.run_due(self.cfg, at("2026-12-16", 9)), [])
-        self.assertTrue(db.kv_get(f"calib_reported:{rid}"))
 
 
 try:

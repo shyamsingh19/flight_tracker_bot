@@ -6,7 +6,7 @@ A single-user Telegram bot that watches domestic Indian fares through the Ignav 
 | File | Role |
 |---|---|
 | `bot.py` | Entry point. Holds the Telegram commands and the tick, heartbeat, daily summary and nightly backup jobs |
-| `checker.py` | Runs the anchor, buffer-scan, alternative and burst checks, plus active hours, expiry and the calibration replay |
+| `checker.py` | Runs the anchor, buffer-scan, alternative and burst checks, plus active hours and expiry |
 | `alerts.py` | Alert rules (pure `decide()`) and the message text |
 | `providers.py` | Ignav client. This is the only data source |
 | `config.py` / `config.toml` | Schema, defaults, validation and the projected-cost formula / every tunable number |
@@ -35,7 +35,6 @@ To try it without spending calls, run `DRY_RUN=1 DB_PATH=dry.db .venv/bin/python
 `/track HYD DEL 2026-12-20 flex=5 target=4500 stops=0 airline=6E flight=6E2134 time=06-12 bags=1 every=120 force`
 - Everything after the date is optional.
 - `/track` refuses a route that would push projected spend past the hard stop, unless you add `force`.
-- The first route you track becomes the 14-day calibration route: D is checked every 30 min, and the bot sends its verdict at day 14.
 
 Other commands: `/list`, `/history id`, `/status`, `/checknow id [all]`, `/settarget [id] [4500 [buffer]|off]` (or 🎯 in My Alerts), `/pause id`, `/resume id`, `/delete id`, `/reload`.
 

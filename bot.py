@@ -189,7 +189,7 @@ def parse_track(cfg, args, today):
         "max_stops": stops, "time_start": t0, "time_end": t1,
         "min_bags": int(opts["bags"]) if "bags" in opts else None,
         "target_inr": int(opts["target"]) if "target" in opts else None,
-        "anchor_every_min": every, "calibration": 0, "status": "active",
+        "anchor_every_min": every, "status": "active",
     }, "force" in flags
 
 
@@ -205,8 +205,6 @@ async def cmd_track(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 def save_route(cfg, route, force, now):
     """Insert a parsed route unless it would push projected spend past the hard stop → reply text."""
     route["created_at"] = iso(now)
-    route["calibration"] = int(cfg["calibration"]["enabled"] and route["anchor_every_min"] is None
-                               and not db.one("SELECT 1 FROM routes WHERE calibration=1"))
     lo0, hi0 = checker.projected(cfg, now)
     lo, hi = checker.projected(cfg, now, extra=route)
     stop = budget.hard_stop_inr(cfg)
@@ -215,13 +213,11 @@ def save_route(cfg, route, force, now):
                 f"{inr(stop)} hard stop. Raise [budget] monthly_cap_inr in config.toml and /reload, "
                 f"use a smaller flex= or every=120, or add 'force' to /track.")
     rid = db.insert("routes", route)
-    note = (f"\n🧪 Calibration route: D every {cfg['calibration']['anchor_every_min']} min for "
-            f"{cfg['calibration']['days']} days." if route["calibration"] else "")
     what = " ".join(x for x in [route["flight_no"], "direct only" if route["max_stops"] == 0 else ""] if x)
     return (f"✅ Tracking #{rid} {route['origin']}→{route['destination']} {day_label(route['anchor_date'])} "
             f"±{route['flex_days']} days{' · ' + what if what else ''}. This route ≈ {inr(lo - lo0)}–{inr(hi - hi0)}"
             f"/month; all routes {inr(lo)}–{inr(hi)} (cap {inr(cfg['budget']['monthly_cap_inr'])}). First check "
-            f"within a minute if inside active hours.{note}")
+            f"within a minute if inside active hours.")
 
 
 async def cmd_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -383,12 +379,6 @@ def status_text(cfg, now):
     ]
     if (blocked := budget.blocked(cfg, now)):
         lines.append(f"⛔ Checks blocked: {blocked}")
-    for r in db.q("SELECT * FROM routes WHERE calibration=1"):
-        if checker.calibrating(cfg, r, now):
-            day = (now - parse(r["created_at"])).days + 1
-            lines.append(f"🧪 Calibration on #{r['id']}: day {day} of {cfg['calibration']['days']}")
-        else:
-            lines.append(checker.calibration_report(cfg, checker.calibration_series(cfg, r), r["flex_days"])[1])
     lines.append("Last heartbeat: " + (f"{age(hb, now)} ago" if hb else "never (HEARTBEAT_URL unset?)"))
     return "\n".join(lines)
 

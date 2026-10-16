@@ -1,4 +1,4 @@
-"""Scheduled checks: anchor date D, buffer scan, alternative watch, burst, calibration.
+"""Scheduled checks: anchor date D, buffer scan, alternative watch, burst.
 Runs in a worker thread; every function returns the Telegram messages to send."""
 import html
 import logging
@@ -22,34 +22,22 @@ def local(cfg, now):
     return now.astimezone(ZoneInfo(cfg["schedule"]["timezone"]))
 
 
-def calibrating(cfg, r, now):
-    c = cfg["calibration"]
-    return bool(c["enabled"] and r["calibration"] and now < parse(r["created_at"]) + timedelta(days=c["days"]))
+def anchor_every(cfg, r):
+    return max(r["anchor_every_min"] or cfg["schedule"]["anchor_every_min"], cfg["schedule"]["min_interval_min"])
 
 
-def anchor_every(cfg, r, now, steady=False):
-    if r["anchor_every_min"]:
-        every = r["anchor_every_min"]
-    elif not steady and calibrating(cfg, r, now):
-        every = cfg["calibration"]["anchor_every_min"]
-    else:
-        every = cfg["schedule"]["anchor_every_min"]
-    return max(every, cfg["schedule"]["min_interval_min"])
-
-
-def slowdown(cfg, r, now, steady=False):
+def slowdown(cfg, r, now):
     s = cfg["schedule"]
     far = (date.fromisoformat(r["anchor_date"]) - local(cfg, now).date()).days > s["far_out_days"]
-    return s["far_out_slowdown"] if far and (steady or not calibrating(cfg, r, now)) else 1
+    return s["far_out_slowdown"] if far else 1
 
 
 def projected(cfg, now, extra=None):
-    """(without, with) alternative watch, ₹/month for active routes (+ an unsaved one), steady state:
-    the calibration's extra calls are left out since they run on the free allowance."""
+    """(without, with) alternative watch, ₹/month for active routes (+ an unsaved one)."""
     rows = list(db.q("SELECT * FROM routes WHERE status='active'")) + ([extra] if extra else [])
     lo = hi = 0.0
     for r in rows:
-        args = (cfg, r["flex_days"], anchor_every(cfg, r, now, True), slowdown(cfg, r, now, True))
+        args = (cfg, r["flex_days"], anchor_every(cfg, r), slowdown(cfg, r, now))
         lo += config.calls_per_day(*args, with_alt=False)
         hi += config.calls_per_day(*args, with_alt=True)
     return config.monthly_inr(cfg, lo), config.monthly_inr(cfg, hi)
@@ -106,7 +94,7 @@ def run_due(cfg, now=None):
             continue
         if not in_active(cfg, loc):
             continue
-        jobs = config.job_slots(cfg, anchor_every(cfg, r, now), slowdown(cfg, r, now))
+        jobs = config.job_slots(cfg, anchor_every(cfg, r), slowdown(cfg, r, now))
         for kind, job in (("anchor", job_anchor), ("scan", job_scan), ("alt", job_alt)):
             r = db.route(r["id"])
             slot = latest_slot(*jobs[kind], loc)
@@ -114,7 +102,7 @@ def run_due(cfg, now=None):
                 continue
             db.update_route(r["id"], **{f"last_{kind}_at": iso(slot)})  # a failed slot is not retried
             msgs += job(cfg, r, now)
-    return msgs + calibration_due(cfg, now)
+    return msgs
 
 
 def expired(r, loc):
@@ -312,65 +300,4 @@ def check_now(cfg, rid, dates, now=None):
     for d in dates:
         msgs += check(cfg, r, d, "manual", now)
     pick_alt(cfg, rid, now)
-    return msgs
-
-
-# ---------------------------------------------------------------- calibration
-
-def calibration_series(cfg, r):
-    end = iso(parse(r["created_at"]) + timedelta(days=cfg["calibration"]["days"]))
-    return [(local(cfg, parse(o["observed_at"])), o["price_inr"], bool(o["cache_hit"])) for o in db.q(
-        f"SELECT observed_at, price_inr, cache_hit FROM observations WHERE route_id=? AND depart_date=? "
-        f"AND kind='anchor' AND {PRICED} AND observed_at<? ORDER BY observed_at", (r["id"], r["anchor_date"], end))]
-
-
-def calibration_report(cfg, series, flex):
-    """Replay a fine-grained D history at coarser intervals → (verdict, report text).
-    series: [(local datetime, price, cache_hit)] at calibration.anchor_every_min."""
-    c, d = cfg["calibration"], cfg["deal"]
-    base, start = c["anchor_every_min"], cfg["schedule"]["active_hours"][0] * 60
-    window = timedelta(hours=d["drop_window_h"])
-    grid = lambda t: round((t.hour * 60 + t.minute) / base) * base - start  # noqa: E731
-    events = []
-    for i, (t, p, _) in enumerate(series):
-        prior = [q for u, q, _ in series[:i] if t - u <= window]
-        if prior and (low := min(prior)) - p >= d["drop_abs_inr"] and (low - p) * 100 / low >= d["drop_pct"]:
-            events.append((t, p))
-    missed = {}
-    for every in c["compare_intervals_min"]:
-        coarse = [(t, p) for t, p, _ in series if grid(t) % every == 0]
-        missed[every] = {}
-        for t, p in events:  # what you'd have paid at best within the window, seeing only coarse checks
-            seen = [q for u, q in coarse if t <= u <= t + window]
-            if seen and min(seen) > p:
-                missed[every][t] = min(seen) - p
-    days = max(1, (series[-1][0] - series[0][0]).days + 1) if series else 1
-    first = c["compare_intervals_min"][0]
-    rechecks = [h for t, _, h in series if grid(t) % first]
-    cache_pct = 100 * sum(rechecks) / len(rechecks) if rechecks else 0
-    lost = sum(missed[first].values()) * 30 / days
-    extra = (config.monthly_inr(cfg, config.calls_per_day(cfg, flex, base))
-             - config.monthly_inr(cfg, config.calls_per_day(cfg, flex, first)))
-    lines = [f"🧪 Calibration report: {len(series)} checks of D every {base} min over {days} days, "
-             f"{len(events)} drop events, {cache_pct:.0f}% of the extra re-checks were cache hits."]
-    for every, m in missed.items():
-        lines.append(f"• every {every} min would have missed {len(m)} events worth "
-                     f"{alerts.inr(sum(m.values()))} (≈ {alerts.inr(sum(m.values()) * 30 / days)}/month)")
-    if len(events) < c["min_events"]:
-        verdict = f"not enough evidence ({len(events)} < {c['min_events']} events), stay at {first} min"
-    elif lost > extra and cache_pct < c["max_cache_hit_pct"]:
-        verdict = f"move D to every {base} min (missed ≈ {alerts.inr(lost)}/month > extra cost {alerts.inr(extra)})"
-    elif len(c["compare_intervals_min"]) > 1 and not set(missed[c["compare_intervals_min"][1]]) - set(missed[first]):
-        verdict = f"step D down to every {c['compare_intervals_min'][1]} min (it missed nothing {first} min caught)"
-    else:
-        verdict = f"stay at {first} min"
-    lines.append(f"Verdict: {verdict}. A guide, not proof. Change [schedule] anchor_every_min to apply it.")
-    return verdict, "\n".join(lines)
-
-
-def calibration_due(cfg, now):
-    msgs = []
-    for r in db.q("SELECT * FROM routes WHERE calibration=1"):
-        if not calibrating(cfg, r, now) and cfg["calibration"]["enabled"]:
-            msgs += once(f"calib_reported:{r['id']}", calibration_report(cfg, calibration_series(cfg, r), r["flex_days"])[1])
     return msgs

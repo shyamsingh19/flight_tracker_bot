@@ -17,7 +17,7 @@ Send `/start` to get four buttons:
 | 🔍 Flight Search | Asks for the departure city, the destination and the date, then shows the cheapest flights. **Costs one call.** |
 | 🔔 My Alerts | Lists your tracked routes, with Delete, 🎯 Target and Pause/Resume buttons |
 | 🎯 Set Target | Asks for a target price (and optional buffer); asks which route first if you track several |
-| 📊 Status | Shows API health, money spent this month, free calls left and calibration progress |
+| 📊 Status | Shows API health, money spent this month and free calls left |
 | ❓ Help | Lists the commands |
 
 **Search walkthrough:**
@@ -59,7 +59,7 @@ Only the origin, destination and date are required.
 | `/delete 3` | Remove the route |
 | `/checknow 3` | Check D right now (1 call) |
 | `/checknow 3 all` | Check D and every date in D±flex. This is many calls, so the bot asks you to confirm by adding `yes` |
-| `/status` | Health, spend and calibration |
+| `/status` | Health and spend |
 
 A route expires on its own once its date passes, or, for a `flight=` route, once that flight departs.
 
@@ -80,7 +80,6 @@ Each alert includes a Google Flights link. **Book on the airline's website.** Th
 - **02:00 nightly backup**, a `.db` file you can restore from (see README).
 - **Failure notice** if Ignav keeps failing (3 failures in a row, or 60 minutes of errors).
 - **Budget warnings** at 50%, 80% and 100% of the monthly cap.
-- **Calibration verdict on day 14.** The first route you track is checked every 30 minutes for 14 days. The bot then tells you whether checking every 60 or 120 minutes would have missed any drops, so you can choose `anchor_every_min` from evidence.
 
 ---
 
@@ -132,11 +131,11 @@ Searches and `/checknow` count against the same budget. The first 1,000 Ignav ca
 | More sensitive drop alerts | `drop_abs_inr = 200`, `drop_pct = 3` |
 | No late-night checks | `active_hours = "08-21"` (also saves calls) |
 | Spend less on all routes | `anchor_every_min = 120`, or `alt_watch_every_h = 0` to turn alternatives off |
+| Check the travel date more often | `anchor_every_min = 30` (doubles those calls) |
 | Scan nearby dates every 2 days | `buffer_scan_every_h = 48` |
 | Wider flexibility | `flex_days = 7` (max is `max_flex_days`) |
 | Deal alerts sooner on a new route | `min_samples = 10` (less reliable) |
 | Business class | `cabin_class = "business"` |
-| Skip the 14-day calibration | `[calibration] enabled = false` |
 | Show more search results | `[ui] search_results_n = 8` |
 | Quieter failure messages | `fail_notify_after = 5`, `fail_notify_cooldown_min = 180` |
 | Card charges a different rate | `usd_inr_effective = 118`. This keeps the spend figures honest |

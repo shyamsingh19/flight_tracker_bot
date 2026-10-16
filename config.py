@@ -101,14 +101,6 @@ SCHEMA = {
         "backup_at": ("02:00", hhmm),
         "log_level": ("INFO", ("DEBUG", "INFO", "WARNING", "ERROR")),
     },
-    "calibration": {
-        "enabled": (True, bool),
-        "days": (14, int, 1, 90),
-        "anchor_every_min": (30, int, 1, 1440),
-        "compare_intervals_min": ([60, 120], list, 1, 1440),
-        "min_events": (5, int, 1, 10000),
-        "max_cache_hit_pct": (50, float, 0, 100),
-    },
     "ui": {
         "history_default_n": (20, int, 1, 500),
         "search_results_n": (5, int, 1, 20),
