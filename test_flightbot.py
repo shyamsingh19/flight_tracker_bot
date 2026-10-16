@@ -241,6 +241,14 @@ class TestRules(Base):
         bot.set_target(db.route(rid), "OFF")
         self.assertIsNone(db.route(rid)["target_inr"])
 
+    def test_checknow_quota(self):
+        now, limit = at("2026-12-01", 9), self.cfg["ui"]["checknow_per_user_day"]
+        self.assertIsNone(bot.checknow_quota(self.cfg, 1, limit - 1, now))
+        self.assertIsNone(bot.checknow_quota(self.cfg, 1, 1, now))
+        self.assertIn("⛔", bot.checknow_quota(self.cfg, 1, 1, now))
+        self.assertIsNone(bot.checknow_quota(self.cfg, 2, 1, now))  # per user
+        self.assertIsNone(bot.checknow_quota(self.cfg, 1, 1, at("2026-12-02", 9)))  # new day
+
     def test_calls_log(self):
         rid = self.route(target_inr=4500, flex_days=0)
         self.check(rid, D, 4000, at("2026-12-01", 9))

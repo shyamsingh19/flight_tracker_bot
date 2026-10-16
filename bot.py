@@ -358,8 +358,21 @@ async def cmd_checknow(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await run_checknow(update, ctx, r, dates, now)
 
 
+def checknow_quota(cfg, uid, n, now):
+    """Reserve n manual calls for this user today (schedule timezone). Returns an error text if over the limit."""
+    limit = cfg["ui"]["checknow_per_user_day"]
+    key = f"checknow:{uid}:{checker.local(cfg, now).date()}"
+    used = int(db.kv_get(key) or 0)
+    if used + n > limit:
+        return f"⛔ Daily manual-check limit: {used}/{limit} used today, this needs {n}. Resets at midnight."
+    db.kv_set(key, str(used + n))
+    return None
+
+
 async def run_checknow(update, ctx, r, dates, now):
     cfg = cfg_of(ctx)
+    if why := checknow_quota(cfg, update.effective_user.id, len(dates), now):
+        return await say(update, why)
     await say(update, f"Checking {len(dates)} date(s), ≈ ₹{len(dates) * config.per_call_inr(cfg):.2f}…")
     msgs = await asyncio.to_thread(checker.check_now, cfg, r["id"], dates, now)
     for m in msgs:  # price alerts reach ALERT_USER_IDS too, like a scheduled check

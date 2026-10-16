@@ -81,3 +81,4 @@ admin_notices       = true       # false = admin gets only price alerts (no summ
 history_default_n   = 20         # rows shown by /history and /calls
 search_results_n    = 5          # flights shown after a menu search
 checknow_confirm_above_inr = 1   # /checknow asks first if it would cost more than this
+checknow_per_user_day = 5        # manual checks (/checknow, 🔄) each user may run per day; 0 = none
