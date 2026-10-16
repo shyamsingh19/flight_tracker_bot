@@ -1,4 +1,5 @@
 """python -m unittest — no network, no Telegram, 0 Ignav calls."""
+import asyncio
 import json
 import os
 import re
@@ -7,6 +8,7 @@ import tomllib
 import unittest
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import alerts
@@ -449,6 +451,25 @@ class TestGuidedFlow(Base):
         self.assertIn("#1 HYD → DEL", text)
         self.assertIn("← your date", text)
         self.assertEqual([b.callback_data for b in kb.inline_keyboard[0]], ["r:deleted:1", "t:1", "r:paused:1"])
+
+    def test_gate(self):
+        os.environ |= {"ALLOWED_USER_ID": "1", "ALERT_USER_IDS": "2"}
+        sent = []
+
+        async def reply(text, **kw):
+            sent.append(text)
+
+        def upd(uid, text):
+            msg = SimpleNamespace(text=text, reply_text=reply)
+            return SimpleNamespace(effective_user=SimpleNamespace(id=uid, username="u"),
+                                   callback_query=None, effective_message=msg)
+
+        asyncio.run(bot.gate(upd(1, "/reload"), None))  # admin: everything
+        asyncio.run(bot.gate(upd(2, "/list"), None))  # alert user: features
+        for uid, text in [(2, "/reload"), (2, "/status@flightbot"), (3, "/list")]:
+            with self.assertRaises(bot.ApplicationHandlerStop):
+                asyncio.run(bot.gate(upd(uid, text), None))
+        self.assertEqual(sent, ["⛔ Admin only."] * 2)  # stranger gets no reply
 
     def test_app_wiring_builds(self):
         app = bot.build_app(self.cfg, "123:abc")

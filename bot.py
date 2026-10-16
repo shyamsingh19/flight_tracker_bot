@@ -428,11 +428,26 @@ def status_text(cfg, now):
     return "\n".join(lines)
 
 
+ADMIN_ONLY = {"/reload", "/status", "menu:status"}  # server health, spend and config: admin only
+
+
+def alert_ids():
+    return [int(x) for x in os.environ.get("ALERT_USER_IDS", "").replace(",", " ").split()
+            if x.lstrip("-").isdigit()]  # a typo is skipped, not fatal
+
+
 async def gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Runs before every handler: anyone but ALLOWED_USER_ID gets no reply."""
+    """Runs before every handler: the admin gets everything, ALERT_USER_IDS everything but ADMIN_ONLY, others nothing."""
     u = update.effective_user
-    if not u or u.id != int(os.environ["ALLOWED_USER_ID"]):
+    if u and u.id == int(os.environ["ALLOWED_USER_ID"]):
+        return
+    if not u or u.id not in alert_ids():
         log.warning("ignored update from unauthorized user %s (%s)", u.id if u else None, u.username if u else None)
+        raise ApplicationHandlerStop
+    q, m = update.callback_query, update.effective_message
+    what = q.data if q else (m.text or " ").split()[0].split("@")[0] if m else ""
+    if what in ADMIN_ONLY:
+        await (q.answer("Admin only") if q else say(update, "⛔ Admin only."))
         raise ApplicationHandlerStop
 
 
@@ -691,9 +706,7 @@ def recipients(cfg, text):
     """Price alerts → admin + ALERT_USER_IDS; anything else → admin, only if admin_notices is on."""
     admin = int(os.environ["ALLOWED_USER_ID"])
     if isinstance(text, alerts.Flight):
-        others = [int(x) for x in os.environ.get("ALERT_USER_IDS", "").replace(",", " ").split()
-                  if x.lstrip("-").isdigit()]  # a typo is skipped, not fatal
-        return list(dict.fromkeys([admin] + others))  # each id once, admin first
+        return list(dict.fromkeys([admin] + alert_ids()))  # each id once, admin first
     return [admin] if cfg["monitoring"]["admin_notices"] else []
 
 
