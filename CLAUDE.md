@@ -20,6 +20,7 @@ There is no linter or build step. Dependency: `python-telegram-bot[job-queue]` o
 
 - Run `.venv/bin/python -m unittest` after every change; all must pass.
 did- Keep this file current: whenever a change or decision alters behaviour, conventions, commands or architecture described here (or adds something future work needs to know), update CLAUDE.md in the same change. Record the decision and its reason, not a changelog.
+- State that only matters on one machine (live DB, running service, pending local steps, known local test failures) goes in the gitignored `CLAUDE.local.md`, kept current the same way; not here.
 - Message text/formatting changes (help, /list, alerts) can't be verified by tests — say so, and check with the DRY_RUN bot in Telegram.
 
 ## Architecture
