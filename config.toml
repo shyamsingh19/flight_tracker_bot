@@ -33,20 +33,20 @@ burst_flex_days     = 5          # on a good deal, search ± this many days righ
 burst_cooldown_h    = 12         # wait at least this long between those extra searches
 
 [deal]                           # when an alert is sent
-baseline_days       = 30         # "normal price" = prices seen in the last N days
+baseline_days       = 30         # "normal price" = your date's scheduled prices in the last N days
 good_percentile     = 25         # "good" = cheaper than 75% of those prices
 great_percentile    = 10         # "great" = cheaper than 90%
-min_samples         = 20         # no good/great labels until this many prices are stored
+min_samples         = 20         # no good/great/new-low alerts until this many scheduled prices of your date
 freshness_h         = 26         # prices older than this are left out of comparisons
-drop_abs_inr        = 300        # "price dropped" alert: down by ₹300 AND 5%…
-drop_pct            = 5
-drop_window_h       = 24         # …compared with the lowest price in the last 24 h
+min_lead_h          = 3          # ignore flights leaving within 3 h (too late to book)
+deadline_days       = 14         # ⏰ one "book by" reminder 14 days before your date
+suspicious_pct      = 30         # search again before alerting a price 30% below the lowest seen
 alt_cheaper_abs_inr = 300        # "cheaper nearby date" alert: saves ₹300 or 5%, whichever is larger
 alt_cheaper_pct     = 5
 alt_realert_h       = 24         # alert about the same nearby date at most once per 24 h…
 alt_realert_abs_inr = 100        # …unless the saving grows by another ₹100
-realert_abs_inr     = 100        # repeat a good-deal or target alert only if it drops ₹100 AND 3% more
-realert_pct         = 3
+realert_abs_inr     = 100        # repeat a deal/new-low/target alert only if ₹100 or 3% lower, whichever is larger;
+realert_pct         = 3          #   a good/great deal must also be that far below the median
 near_tie_inr        = 200        # a nearby date within ₹200 or 3% of the travel date
 near_tie_pct        = 3          #   gets re-checked every alt_watch_every_h
 recheck_unverified  = true       # search again to confirm a cached price before alerting

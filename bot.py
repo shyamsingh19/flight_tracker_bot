@@ -416,7 +416,7 @@ def status_text(cfg, now):
     last_ok = db.one("SELECT observed_at FROM observations WHERE ok=1 ORDER BY id DESC LIMIT 1")
     last_err = db.one("SELECT observed_at, error FROM observations WHERE ok=0 ORDER BY id DESC LIMIT 1")
     best = db.one("SELECT a.*, r.origin, r.destination FROM alerts a JOIN routes r ON r.id=a.route_id "
-                  "WHERE a.rule='drop' AND a.sent_at>=? ORDER BY a.saving_inr DESC LIMIT 1",
+                  "WHERE a.rule='new_low' AND a.unverified=0 AND a.sent_at>=? ORDER BY a.saving_inr DESC LIMIT 1",
                   (iso(datetime.fromisoformat(month + "-01").replace(tzinfo=ZoneInfo(cfg["schedule"]["timezone"]))),))
     hb = db.kv_get("last_heartbeat")
     lines = [
@@ -425,7 +425,7 @@ def status_text(cfg, now):
         projection_text(cfg, now),
         f"Spent {month}: ₹{budget.month_spend(cfg, now):.0f} of {inr(cfg['budget']['monthly_cap_inr'])} · "
         f"Ignav free calls left: {budget.free_left(cfg)} ({budget.calls_used()} used)",
-        "Best drop this month: " + (f"{best['origin']}→{best['destination']} {day_label(best['depart_date'])} "
+        "Best new low this month: " + (f"{best['origin']}→{best['destination']} {day_label(best['depart_date'])} "
                                     f"{inr(best['price_inr'])} (−{inr(best['saving_inr'])})" if best else "none yet"),
     ]
     if (blocked := budget.blocked(cfg, now)):
@@ -724,6 +724,9 @@ async def send(ctx, text):
             await ctx.bot.send_message(uid, text)
         except TelegramError as e:  # e.g. that user never pressed Start: don't block the others
             log.warning("send to %s failed: %s", uid, e)
+            continue
+        if getattr(text, "record", None):  # alert lines + re-alert state, only once actually sent
+            db.record_message(*text.record)
 
 
 async def tick(ctx: ContextTypes.DEFAULT_TYPE):
@@ -798,6 +801,9 @@ def main():
     logging.getLogger("httpx").setLevel(logging.WARNING)
     db.init()
     db.run("UPDATE routes SET owner_id=? WHERE owner_id IS NULL", (int(os.environ["ALLOWED_USER_ID"]),))
+    if not db.kv_get("baseline_backfilled"):  # one-time after the upgrade to baseline slots
+        db.backfill_baseline_slots(["anchor"], cfg["schedule"]["anchor_every_min"])
+        db.kv_set("baseline_backfilled", "1")
     build_app(cfg, os.environ["TELEGRAM_TOKEN"]).run_polling(allowed_updates=Update.ALL_TYPES)
 
 

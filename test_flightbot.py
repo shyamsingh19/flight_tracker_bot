@@ -42,9 +42,19 @@ class Fake:
         if self.error:
             raise self.error
         p = self.prices.get(day, 6000)
-        if isinstance(p, list) and p and isinstance(p[0], (int, list)):
+        if isinstance(p, list) and p and isinstance(p[0], (int, list, Exception)):
             p = p.pop(0) if len(p) > 1 else p[0]
+        if isinstance(p, Exception):
+            raise p
         return (p if isinstance(p, list) else [offer(p, day)]), self.cache, 1
+
+
+def sent(msgs):
+    """What bot.send does once a message went out: record its alert lines and re-alert state."""
+    for m in msgs:
+        if getattr(m, "record", None):
+            db.record_message(*m.record)
+    return msgs
 
 
 class Base(unittest.TestCase):
@@ -69,7 +79,14 @@ class Base(unittest.TestCase):
 
     def check(self, rid, day, price, now, kind="anchor"):
         self.fake.prices[day] = price
-        return checker.check(self.cfg, db.route(rid), day, kind, now)
+        return sent(checker.scan(self.cfg, db.route(rid), [day], kind, now))
+
+    def seed(self, rid, now, n=25, price=6000):
+        """n scheduled baseline samples of D over the 2 days before now."""
+        for i in range(n):
+            when = now - timedelta(days=2, hours=i)
+            db.add_observation({"route_id": rid, "depart_date": D, "kind": "anchor", "ok": 1, "provider": "ignav",
+                                "observed_at": db.iso(when), "price_inr": price + 10 * i, "baseline_slot": db.iso(when)})
 
 
 class TestConfig(Base):
@@ -188,8 +205,7 @@ class TestAltWatch(Base):
         self.fake.prices["2026-12-21"] = 5500
         checker.job_alt(self.cfg, db.route(rid), at("2026-12-01", 11))
         self.assertEqual(db.route(rid)["alt_date"], "2026-12-22")  # 5150 is within ₹200 of 5000
-        self.fake.prices["2026-12-22"] = 5300
-        checker.check(self.cfg, db.route(rid), "2026-12-22", "alt", at("2026-12-01", 14))
+        self.check(rid, "2026-12-22", 5300, at("2026-12-01", 14), "alt")
         checker.pick_alt(self.cfg, rid, at("2026-12-01", 14))
         self.assertIsNone(db.route(rid)["alt_date"])
 
@@ -202,7 +218,7 @@ class TestAltWatch(Base):
         self.assertTrue(self.check(rid, alt, 4350, at("2026-12-01", 14), "alt"))  # saving grew by ₹150
         self.check(rid, D, 5000, at("2026-12-02", 14))
         self.assertTrue(self.check(rid, alt, 4500, at("2026-12-02", 14, 1), "alt"))  # 24 h later
-        self.assertEqual(len(self.alerts_of("alt")), 3)
+        self.assertEqual(len(self.alerts_of("cheaper_date")), 3)
 
     def test_stale_anchor_price_not_compared(self):
         rid = self.route()
@@ -211,25 +227,24 @@ class TestAltWatch(Base):
 
 
 class TestRules(Base):
-    def test_bouncing_price_alerts_once(self):
+    def test_new_low_no_false_alarm_after_spike(self):
         rid = self.route()
-        for h, p in zip(range(9, 13), [4900, 4500, 4900, 4500]):
+        self.seed(rid, at("2026-12-01", 9))
+        for h, p in zip(range(9, 13), [5000, 7000, 5500, 4800]):
             self.check(rid, D, p, at("2026-12-01", h))
-        self.assertEqual(len(self.alerts_of("drop")), 1)
+        self.assertEqual([a["price_inr"] for a in self.alerts_of("new_low")], [5000, 4800])
 
-    def test_flight_changed_note(self):
-        rid = self.route()
-        self.check(rid, D, [offer(5000, flight="AI559")], at("2026-12-01", 9))
-        self.check(rid, D, [offer(4500, flight="AI559")], at("2026-12-01", 10))
-        msg = self.check(rid, D, [offer(4000, flight="QP1402")], at("2026-12-01", 11))
-        self.assertIn("was AI559", msg[0])
-        self.assertIn("lowest ever", msg[0])
+    def test_message_basics(self):
+        rid = self.route(target_inr=5000)
+        msg = self.check(rid, D, [offer(4900, flight="AI559")], at("2026-12-01", 9))[0]
+        for want in ["Sun 20 Dec", "₹4,900", "AI559 06:10", "indicative, confirm on booking page"]:
+            self.assertIn(want, msg)
 
     def test_target_buffer(self):
         rid = self.route(target_inr=4500, flex_days=0)
         self.assertFalse(self.check(rid, D, 4500 + self.cfg["deal"]["target_buffer_inr"] + 1, at("2026-12-01", 9)))
         msg = self.check(rid, D, 4600, at("2026-12-01", 10))
-        self.assertIn("₹100 above your target ₹4,500", msg[0])
+        self.assertIn("within ₹100 of your target ₹4,500", msg[0])
         db.update_route(rid, target_buffer_inr=0)  # per-route buffer beats the config default
         self.assertFalse(self.check(rid, D, 4501, at("2026-12-01", 11)))
 
@@ -276,44 +291,76 @@ class TestRules(Base):
         self.assertEqual(len(self.alerts_of("target")), 2)
 
     def test_recheck_unverified(self):
-        rid = self.route()
+        rid = self.route(target_inr=4600, flex_days=0)
         self.check(rid, D, 5000, at("2026-12-01", 9))
         self.fake.calls.clear()
-        self.fake.prices[D] = [[offer(4500, status="unverified")], [offer(4800)]]  # re-check disagrees
-        self.assertEqual(checker.check(self.cfg, db.route(rid), D, "anchor", at("2026-12-01", 10)), [])
+        self.assertEqual(self.check(rid, D, [[offer(4500, status="unverified")], [offer(4800)]],  # re-check disagrees
+                                    at("2026-12-01", 10)), [])
         self.assertEqual(len(self.fake.calls), 2)
-        self.fake.prices[D] = [[offer(4000, status="unverified")], [offer(4050)]]  # within 2%
-        msg = checker.check(self.cfg, db.route(rid), D, "anchor", at("2026-12-01", 11))
+        self.assertEqual(db.one("SELECT valid FROM observations WHERE price_inr=4500")["valid"], 0)
+        msg = self.check(rid, D, [[offer(4000, status="unverified")], [offer(4050)]], at("2026-12-01", 11))  # within 2%
         self.assertIn("₹4,050", msg[0])
+        self.assertNotIn("unverified", msg[0])
+
+    def test_recheck_failed_sends_unverified(self):
+        rid = self.route(target_inr=4600, flex_days=0)
+        msg = self.check(rid, D, [[offer(4500, status="unverified")], providers.ProviderError("HTTP 500", 500)],
+                         at("2026-12-01", 10))
+        self.assertIn("⚠️ unverified", msg[-1])
+        self.assertIsNone(db.one("SELECT valid FROM observations WHERE price_inr=4500")["valid"])
+        self.assertEqual(db.alert_states(rid), {})  # re-alert state not updated with that price
+        self.assertEqual(self.alerts_of("target")[0]["unverified"], 1)
+
+    def test_suspicious_price_rechecked_even_if_verified(self):
+        rid = self.route(target_inr=4600, flex_days=0)
+        self.check(rid, D, 6000, at("2026-12-01", 9))
+        self.fake.calls.clear()
+        self.check(rid, D, [[offer(3000)], [offer(3000)]], at("2026-12-01", 10))  # 50% below lowest seen
+        self.assertEqual(self.fake.calls[:2], [D, D])  # then the burst
+
+    def test_too_close_to_departure_is_invalid(self):
+        rid = self.route(target_inr=4600, flex_days=0)
+        self.assertNotIn("TARGET", "".join(self.check(rid, D, [offer(4000, dep="10:00")], at("2026-12-20", 8))))
+        self.assertEqual(db.one("SELECT valid FROM observations")["valid"], 0)
+
+    def test_book_by_once(self):
+        rid = self.route()
+        self.fake.prices[D] = 5000
+        msgs = sent(checker.run_due(self.cfg, at("2026-12-06", 8)))  # 14 days before D; anchor + buffer scan
+        self.assertEqual(sum("BOOK BY" in m for m in msgs), 1)
+        self.assertIn("now ₹5,000", msgs[0])
+        self.assertFalse(self.check(rid, D, 5000, at("2026-12-06", 9)))
 
     def test_grade(self):
         base = list(range(5000, 6000, 50))
-        self.assertEqual(alerts.grade(self.cfg, 4900, base)[0], "great")
-        self.assertEqual(alerts.grade(self.cfg, 5100, base)[0], "good")
-        self.assertEqual(alerts.grade(self.cfg, 5500, base)[0], "normal")
-        self.assertEqual(alerts.grade(self.cfg, 4900, base[:19]), (None, None))
+        self.assertEqual(alerts.grade(self.cfg, 4900, base)["level"], "great")
+        self.assertEqual(alerts.grade(self.cfg, 5100, base)["level"], "good")
+        self.assertIsNone(alerts.grade(self.cfg, 5300, base))
+        self.assertIsNone(alerts.grade(self.cfg, 4900, base[:19]))  # below min_samples
+        self.assertIsNone(alerts.grade(self.cfg, 5000, [5000] * 25))  # a flat price is never a deal
 
-    def test_baseline_window(self):
+    def test_baseline_is_one_scheduled_sample_per_slot_of_d(self):
         rid = self.route(flex_days=2)
         now = at("2026-12-10", 9)
-        for day, when in [(D, now - timedelta(days=31)), ("2026-12-25", now), ("2026-12-19", now)]:
-            db.insert("observations", {"route_id": rid, "depart_date": day, "kind": "scan", "observed_at": db.iso(when),
-                                       "provider": "ignav", "ok": 1, "price_inr": 5000})
+        slot = db.iso(now)
+        for day, when, price, slot_ in [(D, now - timedelta(days=31), 1, db.iso(now - timedelta(days=31))),
+                                        ("2026-12-19", now, 2, slot), (D, now, 5000, slot), (D, now, 3, slot),
+                                        (D, now, 4, None)]:
+            db.add_observation({"route_id": rid, "depart_date": day, "kind": "anchor", "observed_at": db.iso(when),
+                                "provider": "ignav", "ok": 1, "price_inr": price, "baseline_slot": slot_})
         self.assertEqual(checker.context(self.cfg, db.route(rid), D, now)["baseline"], [5000])
 
     def test_good_deal_burst(self):
         rid = self.route()
         now = at("2026-12-01", 15)
-        for i in range(25):  # season baseline
-            db.insert("observations", {"route_id": rid, "depart_date": D, "kind": "anchor", "ok": 1,
-                                       "observed_at": db.iso(now - timedelta(days=2, hours=i)), "provider": "ignav",
-                                       "price_inr": 6000 + 10 * i})
+        self.seed(rid, now)
         self.fake.prices = {"2026-12-21": 4300}
         msg = self.check(rid, D, 5000, now)
-        self.assertEqual(len(self.fake.calls), 11)  # D + 10 nearby dates, one message
-        self.assertEqual(len(msg), 1)
+        self.assertEqual(len(self.fake.calls), 11)  # D + 10 nearby dates
+        self.assertEqual(len(msg), 2)  # D's message, then the burst's own scan
         self.assertIn("GREAT DEAL", msg[0])
-        self.assertIn("★ Mon 21", msg[0])
+        self.assertIn("NEW LOW", msg[0])
+        self.assertIn("CHEAPER DATE Mon 21 Dec", msg[1])
         self.assertEqual(db.route(rid)["skip_next_scan"], 1)
         self.fake.calls.clear()
         self.assertTrue(self.check(rid, D, 4800, at("2026-12-01", 16)))  # re-alert, but in cooldown → no burst
