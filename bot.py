@@ -651,7 +651,7 @@ def alerts_view(cfg, now):
            Btn(f"⏸ Pause #{r['id']}" if r["status"] == "active" else f"▶️ Resume #{r['id']}",
                callback_data=f"r:{'paused' if r['status'] == 'active' else 'active'}:{r['id']}")] for r in rows]
     kb = [x for row, r in zip(kb, rows) for x in (row, [Btn(f"🔄 Check #{r['id']} now", callback_data=f"c:{r['id']}"),
-                                                        Btn(f"📜 Calls #{r['id']}", callback_data=f"h:{r['id']}")])]
+                                                        Btn(f"📜 History #{r['id']}", callback_data=f"h:{r['id']}")])]
     return "🔔 Your price alerts\n\n" + "\n\n".join(route_card(cfg, r, now) for r in rows), Kb(kb)
 
 
