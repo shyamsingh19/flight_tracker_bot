@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS routes(
   calibration INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL,
   last_anchor_at TEXT, last_scan_at TEXT, last_alt_at TEXT, skip_next_scan INTEGER NOT NULL DEFAULT 0,
   last_burst_at TEXT, consecutive_failures INTEGER NOT NULL DEFAULT 0, first_failure_at TEXT,
-  last_fail_notify_at TEXT);
+  last_fail_notify_at TEXT, owner_id INTEGER);
 CREATE TABLE IF NOT EXISTS observations(
   id INTEGER PRIMARY KEY, route_id INTEGER NOT NULL REFERENCES routes(id), depart_date TEXT NOT NULL,
   kind TEXT NOT NULL, observed_at TEXT NOT NULL, provider TEXT NOT NULL, ok INTEGER NOT NULL, error TEXT,
@@ -54,6 +54,8 @@ def init():
             c.execute("ALTER TABLE observations ADD COLUMN arr_local TEXT")  # databases from before 2026-10-13
         if "target_buffer_inr" not in {r[1] for r in c.execute("PRAGMA table_info(routes)")}:
             c.execute("ALTER TABLE routes ADD COLUMN target_buffer_inr INTEGER")  # NULL = [deal] default
+        if "owner_id" not in {r[1] for r in c.execute("PRAGMA table_info(routes)")}:
+            c.execute("ALTER TABLE routes ADD COLUMN owner_id INTEGER")  # bot.main gives old routes to the admin
 
 
 def q(sql, args=()):

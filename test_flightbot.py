@@ -61,7 +61,7 @@ class Base(unittest.TestCase):
 
     def route(self, created=None, **kw):
         r = {"origin": "HYD", "destination": "DEL", "anchor_date": D, "flex_days": 5,
-             "status": "active", "created_at": db.iso(created or at("2026-12-01", 7))} | kw
+             "status": "active", "created_at": db.iso(created or at("2026-12-01", 7)), "owner_id": 1} | kw
         return db.insert("routes", r)
 
     def alerts_of(self, rule):
@@ -398,13 +398,14 @@ except ImportError:  # python-telegram-bot not installed (system python); the ve
 
 @unittest.skipUnless(bot, "python-telegram-bot not installed")
 class TestRecipients(Base):
-    def test_price_alerts_reach_everyone_other_messages_only_admin(self):
+    def test_route_messages_reach_owner_other_messages_only_admin(self):
         os.environ |= {"ALLOWED_USER_ID": "1", "ALERT_USER_IDS": "2, 3,1,2,oops"}
-        self.assertEqual(bot.recipients(self.cfg, alerts.Flight("deal")), [1, 2, 3])
+        self.assertEqual(bot.recipients(self.cfg, alerts.for_owner({"owner_id": 2}, "deal")), [2])
+        self.assertEqual(bot.recipients(self.cfg, alerts.Flight("deal")), [1])  # no owner → admin
         self.assertEqual(bot.recipients(self.cfg, "⚠️ failed"), [1])
         self.cfg["monitoring"]["admin_notices"] = False
         self.assertEqual(bot.recipients(self.cfg, "⚠️ failed"), [])
-        self.assertEqual(bot.recipients(self.cfg, alerts.Flight("deal")), [1, 2, 3])
+        self.assertEqual(bot.recipients(self.cfg, alerts.for_owner({"owner_id": 2}, "deal")), [2])
 
 
 @unittest.skipUnless(bot, "python-telegram-bot not installed")
@@ -430,25 +431,32 @@ class TestGuidedFlow(Base):
         s = {"o": "HYD", "d": "DEL", "day": "2026-11-06", "direct": False}
         s["offers"] = bot.run_search(self.cfg, "HYD", "DEL", "2026-11-06", at("2026-10-13", 15))
         self.assertEqual(budget.calls_used(), 1)
-        text, kb = bot.results_view(self.cfg, s)
+        text, kb = bot.results_view(self.cfg, s, 1)
         self.assertIn("1 stop", text)
         self.assertIn("17:45 → 20:00", text)
         self.assertEqual(kb.inline_keyboard[0][0].callback_data, "s:trk")
         s["direct"] = True
-        text, kb = bot.results_view(self.cfg, s)
+        text, kb = bot.results_view(self.cfg, s, 1)
         self.assertNotIn("6E668", text)
         route, _ = bot.parse_track(self.cfg, ["HYD", "DEL", "2026-11-06", "stops=0"], date(2026, 10, 13))
-        self.assertIn("✅ Tracking #1", bot.save_route(self.cfg, route, False, at("2026-10-13", 15)))
-        _, kb = bot.results_view(self.cfg, s)
+        self.assertIn("✅ Tracking #1", bot.save_route(self.cfg, route | {"owner_id": 1}, False, at("2026-10-13", 15)))
+        self.assertEqual(bot.results_view(self.cfg, s, 2)[1].inline_keyboard[0][0].callback_data, "s:trk")  # not theirs
+        _, kb = bot.results_view(self.cfg, s, 1)
         self.assertEqual((kb.inline_keyboard[0][0].text, kb.inline_keyboard[0][0].callback_data),
                          ("✅ Tracking #1", "menu:alerts"))
         s["direct"] = False  # all-flights watch of the same date is a different route
-        self.assertEqual(bot.results_view(self.cfg, s)[1].inline_keyboard[0][0].callback_data, "s:trk")
+        self.assertEqual(bot.results_view(self.cfg, s, 1)[1].inline_keyboard[0][0].callback_data, "s:trk")
 
     def test_alerts_view_buttons(self):
         self.route()
-        text, kb = bot.alerts_view(self.cfg, at("2026-12-01", 9))
+        self.route(owner_id=2)
+        text, kb = bot.alerts_view(self.cfg, 1, at("2026-12-01", 9))
         self.assertIn("#1 HYD → DEL", text)
+        self.assertNotIn("#2", text)  # user 2's route
+        self.assertIn("#2 HYD → DEL", bot.alerts_view(self.cfg, 2, at("2026-12-01", 9))[0])
+        u1 = SimpleNamespace(effective_user=SimpleNamespace(id=1))
+        self.assertIsNotNone(bot.own_route(u1, 1))
+        self.assertIsNone(bot.own_route(u1, 2))
         self.assertIn("← your date", text)
         self.assertEqual([b.callback_data for b in kb.inline_keyboard[0]], ["r:deleted:1", "t:1", "r:paused:1"])
 

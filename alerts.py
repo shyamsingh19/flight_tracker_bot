@@ -92,7 +92,14 @@ def target_text(r, p):
 
 
 class Flight(str):
-    """A price alert: goes to the admin and every ALERT_USER_IDS id. Plain strings go to the admin only."""
+    """A message for one route's owner (price alerts, expiry): goes to Flight.to only. Plain strings are admin notices."""
+    to = None
+
+
+def for_owner(r, text):
+    m = Flight(text)
+    m.to = r["owner_id"]
+    return m
 
 
 def message(cfg, r, day, obs, fired, ctx, nearby=None):
@@ -144,4 +151,4 @@ def message(cfg, r, day, obs, fired, ctx, nearby=None):
     if g and ctx["route_normal"]:
         diff = (statistics.median(ctx["baseline"]) / ctx["route_normal"] - 1) * 100
         lines.append(f"Your route's all-time normal: {inr(ctx['route_normal'])} (this season {diff:+.0f}%)")
-    return Flight("\n".join(lines))
+    return for_owner(r, "\n".join(lines))

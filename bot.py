@@ -50,7 +50,7 @@ HELP = """✈️ <b>Flight price alert</b>
   <code>force</code> — allow over the cost cap
 
 📋 <b>Your routes</b>
-/list — all tracked routes
+/list — your tracked routes
 /history <code>id</code> — price history
 /calls <code>id</code> — every search made, with result
 /checknow <code>id</code> [all] — check right now
@@ -138,12 +138,17 @@ def projection_text(cfg, now):
             f"(cap {inr(cfg['budget']['monthly_cap_inr'])}, hard stop {inr(budget.hard_stop_inr(cfg))}).")
 
 
-def get_route(ctx):
+def own_route(update, rid):
+    """A live route of the user who sent this update, else None: users only see and change their own routes."""
+    r = db.route(rid)
+    return r if r and r["status"] != "deleted" and r["owner_id"] == update.effective_user.id else None
+
+
+def get_route(update, ctx):
     try:
-        r = db.route(int(ctx.args[0]))
+        return own_route(update, int(ctx.args[0]))
     except (IndexError, ValueError):
         return None
-    return r if r and r["status"] != "deleted" else None
 
 
 async def say(update, text):
@@ -201,7 +206,7 @@ async def cmd_track(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         route, force = parse_track(cfg, ctx.args, checker.local(cfg, now).date())
     except ValueError as e:
         return await say(update, f"❌ {html.escape(str(e))}")
-    await say(update, save_route(cfg, route, force, now))
+    await say(update, save_route(cfg, route | {"owner_id": update.effective_user.id}, force, now))
 
 
 def save_route(cfg, route, force, now):
@@ -223,12 +228,12 @@ def save_route(cfg, route, force, now):
 
 
 async def cmd_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    text, kb = alerts_view(cfg_of(ctx), now_utc())
+    text, kb = alerts_view(cfg_of(ctx), update.effective_user.id, now_utc())
     await say_kb(update, text, kb)
 
 
 async def set_status(update, ctx, status):
-    if not (r := get_route(ctx)):
+    if not (r := get_route(update, ctx)):
         return await say(update, "❌ Unknown route id.")
     db.update_route(r["id"], status=status)
     await say(update, f"#{r['id']} → {status}. {projection_text(cfg_of(ctx), now_utc())}")
@@ -253,12 +258,14 @@ async def target_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """/settarget [id] [price|off], or the 🎯 button: asks for whatever is missing."""
     if (q := update.callback_query) and q.data.startswith("t:"):
         await q.answer()
-        r = db.route(int(q.data.split(":")[1]))
+        if not (r := own_route(update, int(q.data.split(":")[1]))):
+            return ConversationHandler.END
     else:
         if q:  # ☰ menu button: same as a bare /settarget
             await q.answer()
         args = ctx.args or []
-        live = {x["id"]: x for x in db.q("SELECT * FROM routes WHERE status IN ('active','paused') ORDER BY id")}
+        live = {x["id"]: x for x in db.q("SELECT * FROM routes WHERE status IN ('active','paused') AND owner_id=? "
+                                         "ORDER BY id", (update.effective_user.id,))}
         if args and args[0].isdigit() and int(args[0]) in live:
             r, args = live[int(args[0])], args[1:]
         elif len(live) == 1 and len(args) < 2:  # "/settarget 8000" with a single route
@@ -279,8 +286,7 @@ async def target_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def target_value(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    r = db.route(ctx.user_data.get("target_rid", 0))
-    if not r:
+    if not (r := own_route(update, ctx.user_data.get("target_rid", 0))):
         return ConversationHandler.END
     text = set_target(r, update.message.text)
     await say(update, text)
@@ -302,7 +308,7 @@ def set_target(r, text):
 
 
 async def cmd_history(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not (r := get_route(ctx)):
+    if not (r := get_route(update, ctx)):
         return await say(update, "Usage: /history id")
     cfg, now = cfg_of(ctx), now_utc()
     tz = ZoneInfo(cfg["schedule"]["timezone"])
@@ -338,13 +344,13 @@ def calls_text(cfg, r):
 
 
 async def cmd_calls(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not (r := get_route(ctx)):
+    if not (r := get_route(update, ctx)):
         return await say(update, "Usage: /calls id")
     await say(update, calls_text(cfg_of(ctx), r))
 
 
 async def cmd_checknow(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not (r := get_route(ctx)):
+    if not (r := get_route(update, ctx)):
         return await say(update, "Usage: /checknow id [all]")
     cfg, now = cfg_of(ctx), now_utc()
     words = {a.lower() for a in ctx.args[1:]}
@@ -375,7 +381,7 @@ async def run_checknow(update, ctx, r, dates, now):
         return await say(update, why)
     await say(update, f"Checking {len(dates)} date(s), ≈ ₹{len(dates) * config.per_call_inr(cfg):.2f}…")
     msgs = await asyncio.to_thread(checker.check_now, cfg, r["id"], dates, now)
-    for m in msgs:  # price alerts reach ALERT_USER_IDS too, like a scheduled check
+    for m in msgs:  # alerts go to the route's owner, like a scheduled check
         await (send(ctx, m) if isinstance(m, alerts.Flight) else say(update, m))
     lines = []
     for d in dates:
@@ -519,7 +525,7 @@ async def menu_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     what = q.data.split(":")[1]
     if what == "alerts":
-        text, kb = alerts_view(cfg_of(ctx), now_utc())
+        text, kb = alerts_view(cfg_of(ctx), update.effective_user.id, now_utc())
         await q.message.reply_text(text, reply_markup=kb)
     elif what == "status":
         await q.message.reply_text(status_text(cfg_of(ctx), now_utc()))
@@ -583,7 +589,7 @@ async def search_day(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except providers.ProviderError as e:
         await say(update, f"⚠️ Search failed: {html.escape(e.message)}")
         return ConversationHandler.END
-    text, kb = results_view(cfg, s)
+    text, kb = results_view(cfg, s, update.effective_user.id)
     await say_kb(update, text, kb)
     return ConversationHandler.END
 
@@ -606,7 +612,7 @@ def run_search(cfg, o, d, day, now):
     return sorted(offers, key=lambda x: x["price_inr"])
 
 
-def results_view(cfg, s):
+def results_view(cfg, s, uid):
     shown = [o for o in s["offers"] if not s["direct"] or o["stops"] == 0][:cfg["ui"]["search_results_n"]]
     head = f"📍 {s['o']} → {s['d']} · {day_label(s['day'])}"
     if not shown:
@@ -620,7 +626,7 @@ def results_view(cfg, s):
             bags = f" · {o['bags']} bag" if o["bags"] else ""
             lines.append(f"\n{i}. ✈️ {o['flight_no']} · {stops}\n    🕐 {o['dep_local'][11:16]}{arr} · <b>{inr(o['price_inr'])}</b>{bags}")
     lines.append("\n" + alerts.gf_link({"origin": s["o"], "destination": s["d"]}, s["day"]))
-    t = tracked(s)
+    t = tracked(s, uid)
     rows = [[Btn(f"✅ Tracking #{t['id']}", callback_data="menu:alerts") if t
              else Btn("🔔 Track prices", callback_data="s:trk")],
             [Btn("🔀 All flights" if s["direct"] else "✈️ Direct only", callback_data="s:direct"),
@@ -639,26 +645,27 @@ async def search_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     if q.data == "s:direct":
         s["direct"] = not s["direct"]
-        text, kb = results_view(cfg, s)
+        text, kb = results_view(cfg, s, update.effective_user.id)
         await q.edit_message_text(text, reply_markup=kb)
         return
-    if tracked(s):
+    uid = update.effective_user.id
+    if tracked(s, uid):
         return
     route, _ = parse_track(cfg, [s["o"], s["d"], s["day"]] + (["stops=0"] if s["direct"] else []),
                            checker.local(cfg, now).date())
-    await q.message.reply_text(save_route(cfg, route, False, now))
-    await q.edit_message_reply_markup(results_view(cfg, s)[1])
+    await q.message.reply_text(save_route(cfg, route | {"owner_id": uid}, False, now))
+    await q.edit_message_reply_markup(results_view(cfg, s, update.effective_user.id)[1])
 
 
-def tracked(s):
-    """The live route watching this search's route + date (any flight), so one search makes one alert."""
+def tracked(s, uid):
+    """This user's live route watching this search's route + date (any flight), so one search makes one alert."""
     return db.one("SELECT id FROM routes WHERE status IN ('active','paused') AND origin=? AND destination=? "
-                  "AND anchor_date=? AND flight_no IS NULL AND max_stops IS ?",
-                  (s["o"], s["d"], s["day"], 0 if s["direct"] else None))
+                  "AND anchor_date=? AND flight_no IS NULL AND max_stops IS ? AND owner_id=?",
+                  (s["o"], s["d"], s["day"], 0 if s["direct"] else None, uid))
 
 
-def alerts_view(cfg, now):
-    rows = db.q("SELECT * FROM routes WHERE status IN ('active','paused') ORDER BY id")
+def alerts_view(cfg, uid, now):
+    rows = db.q("SELECT * FROM routes WHERE status IN ('active','paused') AND owner_id=? ORDER BY id", (uid,))
     if not rows:
         return "🔔 No price alerts yet.", Kb([[Btn("🔍 Flight Search", callback_data="menu:search")]])
     kb = [[Btn(f"❌ Delete #{r['id']}", callback_data=f"r:deleted:{r['id']}"),
@@ -673,24 +680,25 @@ def alerts_view(cfg, now):
 async def route_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     _, status, rid = q.data.split(":")
+    if not own_route(update, int(rid)):
+        return await q.answer("Route not found")
     db.update_route(int(rid), status=status)
     await q.answer(f"#{rid} → {status}")
-    text, kb = alerts_view(cfg_of(ctx), now_utc())
+    text, kb = alerts_view(cfg_of(ctx), update.effective_user.id, now_utc())
     await q.edit_message_text(text, reply_markup=kb)
 
 
 async def calls_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    r = db.route(int(q.data.split(":")[1]))
+    r = own_route(update, int(q.data.split(":")[1]))
     await q.answer()
-    await say(update, calls_text(cfg_of(ctx), r) if r and r["status"] != "deleted" else "Route not found")
+    await say(update, calls_text(cfg_of(ctx), r) if r else "Route not found")
 
 
 async def check_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """🔄 in My Alerts: /checknow id (date D only, one call)."""
     q = update.callback_query
-    r = db.route(int(q.data.split(":")[1]))
-    if not r or r["status"] == "deleted":
+    if not (r := own_route(update, int(q.data.split(":")[1]))):
         return await q.answer("Route not found")
     await q.answer("Checking…")
     await run_checknow(update, ctx, r, [r["anchor_date"]], now_utc())
@@ -703,10 +711,10 @@ async def say_kb(update, text, kb):
 # ---------------------------------------------------------------- jobs
 
 def recipients(cfg, text):
-    """Price alerts → admin + ALERT_USER_IDS; anything else → admin, only if admin_notices is on."""
+    """Route messages (alerts.Flight) → that route's owner; anything else → admin, only if admin_notices is on."""
     admin = int(os.environ["ALLOWED_USER_ID"])
     if isinstance(text, alerts.Flight):
-        return list(dict.fromkeys([admin] + alert_ids()))  # each id once, admin first
+        return [text.to or admin]  # each id once, admin first
     return [admin] if cfg["monitoring"]["admin_notices"] else []
 
 
@@ -789,6 +797,7 @@ def main():
     logging.basicConfig(level=cfg["monitoring"]["log_level"], handlers=[h])
     logging.getLogger("httpx").setLevel(logging.WARNING)
     db.init()
+    db.run("UPDATE routes SET owner_id=? WHERE owner_id IS NULL", (int(os.environ["ALLOWED_USER_ID"]),))
     build_app(cfg, os.environ["TELEGRAM_TOKEN"]).run_polling(allowed_updates=Update.ALL_TYPES)
 
 
