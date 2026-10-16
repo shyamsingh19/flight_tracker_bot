@@ -241,6 +241,23 @@ class TestRules(Base):
         bot.set_target(db.route(rid), "OFF")
         self.assertIsNone(db.route(rid)["target_inr"])
 
+    def test_calls_log(self):
+        rid = self.route(target_inr=4500, flex_days=0)
+        self.check(rid, D, 4000, at("2026-12-01", 9))
+        self.fake.error = providers.ProviderError("HTTP 500 <oops>", 500)
+        self.check(rid, D, 0, at("2026-12-01", 10), kind="manual")
+        self.fake.error = None
+        text = bot.calls_text(self.cfg, db.route(rid))
+        self.assertIn("manual", text)
+        self.assertIn("❌ HTTP 500 &lt;oops&gt;", text)
+        self.assertIn("anchor", text)
+        self.assertIn("₹4,000", text)
+        self.assertIn("🔔 target", text)
+        self.cfg["ui"]["history_default_n"] = 500
+        for i in range(300):
+            self.check(rid, D, 5000 + i, at("2026-12-01", 10))
+        self.assertLessEqual(len(bot.calls_text(self.cfg, db.route(rid))), 4096)
+
     def test_below_target_realert(self):
         rid = self.route(target_inr=4500, flex_days=0)
         self.assertTrue(self.check(rid, D, 4400, at("2026-12-01", 9)))

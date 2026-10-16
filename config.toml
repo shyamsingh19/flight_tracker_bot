@@ -18,7 +18,7 @@ allow_self_transfer = false      # false = skip itineraries where you re-check b
 timezone            = "Asia/Kolkata"
 active_hours        = "08-23"    # searches run only in these hours (end included); "00-23" = all day
 tick_seconds        = 60         # how often the bot checks if a search is due (free)
-anchor_every_min    = 60         # search the travel date every N minutes
+anchor_every_min    = 30         # search the travel date every N minutes
 buffer_scan_every_h = 24         # search nearby dates every N hours (24, 48…); 0 = only after a good deal
 buffer_scan_at      = "08:00"    # time of day for the nearby-dates search
 alt_watch_every_h   = 3          # re-check the cheapest nearby date every N hours; 0 = off
@@ -78,6 +78,6 @@ log_level           = "INFO"
 admin_notices       = true       # false = admin gets only price alerts (no summary, backup, warnings, errors)
 
 [ui]
-history_default_n   = 20         # prices shown by /history
+history_default_n   = 20         # rows shown by /history and /calls
 search_results_n    = 5          # flights shown after a menu search
 checknow_confirm_above_inr = 1   # /checknow asks first if it would cost more than this

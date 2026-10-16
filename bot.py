@@ -14,7 +14,7 @@ from urllib.request import urlopen
 from zoneinfo import ZoneInfo
 
 from telegram import BotCommand, InlineKeyboardButton as Btn, InlineKeyboardMarkup as Kb, LinkPreviewOptions, Update
-from telegram.constants import ParseMode
+from telegram.constants import MessageLimit, ParseMode
 from telegram.error import TelegramError
 from telegram.warnings import PTBUserWarning
 from telegram.ext import (Application, ApplicationHandlerStop, CallbackQueryHandler, CommandHandler, ContextTypes,
@@ -52,6 +52,7 @@ HELP = """✈️ <b>Flight price alert</b>
 📋 <b>Your routes</b>
 /list — all tracked routes
 /history <code>id</code> — price history
+/calls <code>id</code> — every search made, with result
 /checknow <code>id</code> [all] — check right now
 /settarget [<code>id</code>] <code>4500</code> [buffer] · <code>off</code>
 /pause · /resume · /delete <code>id</code>
@@ -317,6 +318,31 @@ async def cmd_history(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await say(update, "\n".join(lines))
 
 
+def calls_text(cfg, r):
+    """Last history_default_n searches for a route: time, kind, date, result, and which ones alerted."""
+    tz = ZoneInfo(cfg["schedule"]["timezone"])
+    rows = db.q("SELECT o.*, GROUP_CONCAT(a.rule) AS fired FROM observations o "
+                "LEFT JOIN alerts a ON a.observation_id=o.id WHERE o.route_id=? "
+                "GROUP BY o.id ORDER BY o.observed_at DESC, o.id DESC LIMIT ?",
+                (r["id"], cfg["ui"]["history_default_n"]))
+    lines = []
+    for o in reversed(rows):
+        res = (f"{inr(o['price_inr'])} {o['flight_no']}" + (" (cached)" if o["cache_hit"] else "")
+               if o["price_inr"] is not None else ("❌ " if not o["ok"] else "") + html.escape(o["error"] or "—"))
+        lines.append(f"{parse(o['observed_at']).astimezone(tz):%d %b %H:%M} {o['kind']} {day_label(o['depart_date'])}: "
+                     f"{res}" + (f" 🔔 {o['fired']}" if o["fired"] else ""))
+    head = f"📜 #{r['id']} {r['origin']}→{r['destination']} — last {len(rows)} searches"
+    while lines and len(head) + sum(len(x) + 1 for x in lines) > MessageLimit.MAX_TEXT_LENGTH:
+        lines.pop(0)  # keep the newest that fit in one message
+    return "\n".join([head] + lines) if lines else f"📜 #{r['id']}: no searches yet."
+
+
+async def cmd_calls(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not (r := get_route(ctx)):
+        return await say(update, "Usage: /calls id")
+    await say(update, calls_text(cfg_of(ctx), r))
+
+
 async def cmd_checknow(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not (r := get_route(ctx)):
         return await say(update, "Usage: /checknow id [all]")
@@ -329,10 +355,15 @@ async def cmd_checknow(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if cost > cfg["ui"]["checknow_confirm_above_inr"] and "yes" not in words:
         return await say(update, f"This runs {len(dates)} calls ≈ ₹{cost:.1f} (free calls left: {budget.free_left(cfg)}). "
                                  f"Send /checknow {r['id']} {' '.join(ctx.args[1:])} yes to run it.")
-    await say(update, f"Checking {len(dates)} date(s), ≈ ₹{cost:.2f}…")
+    await run_checknow(update, ctx, r, dates, now)
+
+
+async def run_checknow(update, ctx, r, dates, now):
+    cfg = cfg_of(ctx)
+    await say(update, f"Checking {len(dates)} date(s), ≈ ₹{len(dates) * config.per_call_inr(cfg):.2f}…")
     msgs = await asyncio.to_thread(checker.check_now, cfg, r["id"], dates, now)
-    for m in msgs:
-        await say(update, m)
+    for m in msgs:  # price alerts reach ALERT_USER_IDS too, like a scheduled check
+        await (send(ctx, m) if isinstance(m, alerts.Flight) else say(update, m))
     lines = []
     for d in dates:
         o = db.one("SELECT * FROM observations WHERE route_id=? AND depart_date=? AND kind='manual' AND observed_at=? "
@@ -606,6 +637,8 @@ def alerts_view(cfg, now):
            Btn(f"🎯 Target #{r['id']}", callback_data=f"t:{r['id']}"),
            Btn(f"⏸ Pause #{r['id']}" if r["status"] == "active" else f"▶️ Resume #{r['id']}",
                callback_data=f"r:{'paused' if r['status'] == 'active' else 'active'}:{r['id']}")] for r in rows]
+    kb = [x for row, r in zip(kb, rows) for x in (row, [Btn(f"🔄 Check #{r['id']} now", callback_data=f"c:{r['id']}"),
+                                                        Btn(f"📜 Calls #{r['id']}", callback_data=f"h:{r['id']}")])]
     return "🔔 Your price alerts\n\n" + "\n\n".join(route_card(cfg, r, now) for r in rows), Kb(kb)
 
 
@@ -616,6 +649,23 @@ async def route_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.answer(f"#{rid} → {status}")
     text, kb = alerts_view(cfg_of(ctx), now_utc())
     await q.edit_message_text(text, reply_markup=kb)
+
+
+async def calls_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    r = db.route(int(q.data.split(":")[1]))
+    await q.answer()
+    await say(update, calls_text(cfg_of(ctx), r) if r and r["status"] != "deleted" else "Route not found")
+
+
+async def check_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """🔄 in My Alerts: /checknow id (date D only, one call)."""
+    q = update.callback_query
+    r = db.route(int(q.data.split(":")[1]))
+    if not r or r["status"] == "deleted":
+        return await q.answer("Route not found")
+    await q.answer("Checking…")
+    await run_checknow(update, ctx, r, [r["anchor_date"]], now_utc())
 
 
 async def say_kb(update, text, kb):
@@ -736,9 +786,11 @@ def build_app(cfg, token):
     app.add_handler(CallbackQueryHandler(menu_button, "^menu:"))
     app.add_handler(CallbackQueryHandler(search_button, "^s:"))
     app.add_handler(CallbackQueryHandler(route_button, "^r:"))
+    app.add_handler(CallbackQueryHandler(check_button, r"^c:\d+$"))
+    app.add_handler(CallbackQueryHandler(calls_button, r"^h:\d+$"))
     for name, fn in [("start", cmd_start), ("help", cmd_help), ("track", cmd_track), ("list", cmd_list),
                      ("delete", cmd_delete), ("pause", cmd_pause), ("resume", cmd_resume),
-                     ("history", cmd_history), ("checknow", cmd_checknow),
+                     ("history", cmd_history), ("checknow", cmd_checknow), ("calls", cmd_calls),
                      ("reload", cmd_reload), ("status", cmd_status)]:
         app.add_handler(CommandHandler(name, fn))
     app.add_error_handler(on_error)
