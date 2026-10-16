@@ -1,5 +1,6 @@
 """python -m unittest — no network, no Telegram, 0 Ignav calls."""
 import json
+import os
 import re
 import tempfile
 import tomllib
@@ -366,6 +367,17 @@ try:
     import bot
 except ImportError:  # python-telegram-bot not installed (system python); the venv has it
     bot = None
+
+
+@unittest.skipUnless(bot, "python-telegram-bot not installed")
+class TestRecipients(Base):
+    def test_price_alerts_reach_everyone_other_messages_only_admin(self):
+        os.environ |= {"ALLOWED_USER_ID": "1", "ALERT_USER_IDS": "2, 3,1,2,oops"}
+        self.assertEqual(bot.recipients(self.cfg, alerts.Flight("deal")), [1, 2, 3])
+        self.assertEqual(bot.recipients(self.cfg, "⚠️ failed"), [1])
+        self.cfg["monitoring"]["admin_notices"] = False
+        self.assertEqual(bot.recipients(self.cfg, "⚠️ failed"), [])
+        self.assertEqual(bot.recipients(self.cfg, alerts.Flight("deal")), [1, 2, 3])
 
 
 @unittest.skipUnless(bot, "python-telegram-bot not installed")

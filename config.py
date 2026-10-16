@@ -100,6 +100,7 @@ SCHEMA = {
         "heartbeat_every_min": (30, int, 1, 1440),
         "backup_at": ("02:00", hhmm),
         "log_level": ("INFO", ("DEBUG", "INFO", "WARNING", "ERROR")),
+        "admin_notices": (True, bool),
     },
     "ui": {
         "history_default_n": (20, int, 1, 500),
@@ -172,7 +173,7 @@ def _cross_check(cfg):
 
 
 def load_env(path=".env"):
-    """Secrets: TELEGRAM_TOKEN, IGNAV_API_KEY, ALLOWED_USER_ID, HEARTBEAT_URL. Re-read on /reload."""
+    """Secrets: TELEGRAM_TOKEN, IGNAV_API_KEY, ALLOWED_USER_ID, ALERT_USER_IDS, HEARTBEAT_URL. Re-read on /reload."""
     p = Path(path)
     if not p.exists():
         return

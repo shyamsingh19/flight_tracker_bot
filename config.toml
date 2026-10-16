@@ -75,6 +75,7 @@ daily_summary_at    = "08:30"
 heartbeat_every_min = 30         # how often to ping HEARTBEAT_URL (if set in .env)
 backup_at           = "02:00"    # nightly database backup
 log_level           = "INFO"
+admin_notices       = true       # false = admin gets only price alerts (no summary, backup, warnings, errors)
 
 [ui]
 history_default_n   = 20         # prices shown by /history

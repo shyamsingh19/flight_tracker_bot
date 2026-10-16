@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 
 from telegram import BotCommand, InlineKeyboardButton as Btn, InlineKeyboardMarkup as Kb, LinkPreviewOptions, Update
 from telegram.constants import ParseMode
+from telegram.error import TelegramError
 from telegram.warnings import PTBUserWarning
 from telegram.ext import (Application, ApplicationHandlerStop, CallbackQueryHandler, CommandHandler, ContextTypes,
                           ConversationHandler, Defaults, MessageHandler, TypeHandler, filters)
@@ -623,8 +624,22 @@ async def say_kb(update, text, kb):
 
 # ---------------------------------------------------------------- jobs
 
+def recipients(cfg, text):
+    """Price alerts → admin + ALERT_USER_IDS; anything else → admin, only if admin_notices is on."""
+    admin = int(os.environ["ALLOWED_USER_ID"])
+    if isinstance(text, alerts.Flight):
+        others = [int(x) for x in os.environ.get("ALERT_USER_IDS", "").replace(",", " ").split()
+                  if x.lstrip("-").isdigit()]  # a typo is skipped, not fatal
+        return list(dict.fromkeys([admin] + others))  # each id once, admin first
+    return [admin] if cfg["monitoring"]["admin_notices"] else []
+
+
 async def send(ctx, text):
-    await ctx.bot.send_message(int(os.environ["ALLOWED_USER_ID"]), text)
+    for uid in recipients(cfg_of(ctx), text):
+        try:
+            await ctx.bot.send_message(uid, text)
+        except TelegramError as e:  # e.g. that user never pressed Start: don't block the others
+            log.warning("send to %s failed: %s", uid, e)
 
 
 async def tick(ctx: ContextTypes.DEFAULT_TYPE):
@@ -651,6 +666,8 @@ async def summary(ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def backup(ctx: ContextTypes.DEFAULT_TYPE):
+    if not cfg_of(ctx)["monitoring"]["admin_notices"]:
+        return
     with tempfile.TemporaryDirectory() as d:
         dest = Path(d) / f"flightbot-{date.today():%Y-%m-%d}.db"
         await asyncio.to_thread(db.backup, dest)
@@ -683,8 +700,9 @@ async def post_init(app):
                                    BotCommand("settarget", "Set a target price (+ buffer)"),
                                    BotCommand("status", "Health and spend"),
                                    BotCommand("help", "All commands")])
-    await app.bot.send_message(int(os.environ["ALLOWED_USER_ID"]),
-                               f"🟢 Bot started. {projection_text(app.bot_data['cfg'], now_utc())}")
+    if app.bot_data["cfg"]["monitoring"]["admin_notices"]:
+        await app.bot.send_message(int(os.environ["ALLOWED_USER_ID"]),
+                                   f"🟢 Bot started. {projection_text(app.bot_data['cfg'], now_utc())}")
 
 
 def main():

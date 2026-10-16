@@ -88,12 +88,12 @@ Each alert includes a Google Flights link. **Book on the airline's website.** Th
 ### Two files, two jobs
 | File | Holds | Takes effect |
 |---|---|---|
-| `.env` | Secrets: `TELEGRAM_TOKEN`, `IGNAV_API_KEY`, `ALLOWED_USER_ID`, `HEARTBEAT_URL` | `/reload` (the Telegram token needs a restart) |
+| `.env` | Secrets: `TELEGRAM_TOKEN`, `IGNAV_API_KEY`, `ALLOWED_USER_ID`, `ALERT_USER_IDS`, `HEARTBEAT_URL` | `/reload` (the Telegram token needs a restart) |
 | `config.toml` | Every tunable number | `/reload` |
 
 **Workflow:** edit `config.toml`, then send `/reload`. The bot replies with the new projected monthly cost and every key that changed (`deal.drop_abs_inr: 300 → 200`). If the file is invalid, the bot names the bad key and keeps the old config running, so a typo can't break it.
 
-Messages from anyone other than `ALLOWED_USER_ID` are silently ignored. Get your id from @userinfobot.
+`ALLOWED_USER_ID` is the admin: the only person who can use the bot. Anyone listed in `ALERT_USER_IDS` (comma-separated) gets the price alerts only, and each of them must press Start in the bot once. Everything else (daily summary, backup, budget warnings, errors) goes to the admin only, and `[monitoring] admin_notices = false` turns those off too. Messages from anyone other than the admin are silently ignored. Get ids from @userinfobot.
 
 ### Where the money goes
 Cost per route per day, using the defaults (active 08–23, ₹0.23 a call):

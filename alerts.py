@@ -91,6 +91,10 @@ def target_text(r, p):
     return f"below your target {inr(t)}" if p <= t else f"{inr(p - t)} above your target {inr(t)}"
 
 
+class Flight(str):
+    """A price alert: goes to the admin and every ALERT_USER_IDS id. Plain strings go to the admin only."""
+
+
 def message(cfg, r, day, obs, fired, ctx, nearby=None):
     """One Telegram message (HTML) for every rule that fired on this observation."""
     rules = {a["rule"]: a for a in fired}
@@ -140,4 +144,4 @@ def message(cfg, r, day, obs, fired, ctx, nearby=None):
     if g and ctx["route_normal"]:
         diff = (statistics.median(ctx["baseline"]) / ctx["route_normal"] - 1) * 100
         lines.append(f"Your route's all-time normal: {inr(ctx['route_normal'])} (this season {diff:+.0f}%)")
-    return "\n".join(lines)
+    return Flight("\n".join(lines))
