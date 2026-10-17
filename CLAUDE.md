@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Single-user Telegram bot that watches domestic Indian fares via the Ignav API (the only data source). Flat layout, plain Python modules, no package. User-facing usage is in `README.md`.
+Multi-user Telegram bot that watches domestic Indian fares via the Ignav API (the only data source). Flat layout, plain Python modules, no package. User-facing usage is in `README.md`.
 
 ## Commands
 
