@@ -67,8 +67,7 @@ def run_due(cfg, now=None):
     for r in db.q("SELECT * FROM routes WHERE status='active'"):
         if done := expired(r, loc):
             db.update_route(r["id"], status="expired")
-            msgs.append(alerts.for_owner(r, f"✅ {alerts.route_name(r)} "
-                        f"expired ({done}). Tracking stopped."))
+            msgs.append(alerts.for_owner(r, f"✈️ {alerts.route_name(r)}: the {done}, so I've stopped tracking it."))
             continue
         if not in_active(cfg, loc):
             continue

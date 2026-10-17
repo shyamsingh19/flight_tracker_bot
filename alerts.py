@@ -170,23 +170,24 @@ def for_owner(r, text):
 
 def lowest_text(h, tz):
     since = datetime.fromisoformat(h["first_seen"]).astimezone(tz)
-    return f"lowest we've recorded since {since:%d %b} {inr(h['lowest'])}"
+    return f"lowest since {since:%d %b}: {inr(h['lowest'])}"
 
 
 def line(h, tz):
-    day, p, lv = day_label(h["day"]), h["price"], h.get("level")
+    """One rule's line; the route header above it already names the date."""
+    p, lv = h["price"], h.get("level")
     if h["rule"] == "target":
         t = h["target"]
-        text = f"🎯 TARGET {day} · {inr(p)}, " + (f"at/below your target {inr(t)}" if lv == "hit"
-                                                  else f"within {inr(p - t)} of your target {inr(t)}")
+        text = f"🎯 {inr(p)}, " + (f"at or below your target {inr(t)}" if lv == "hit"
+                                    else f"just {inr(p - t)} above your target {inr(t)}")
     elif h["rule"] == "new_low":
-        text = f"📉 NEW LOW {day} · {inr(p)}, previous {lowest_text(h, tz)}"
+        text = f"📉 Lowest price so far: {inr(p)} (before: {lowest_text(h, tz)})"
     else:
-        text = (f"⏰ BOOK BY {day} is {h['days_left']} days away: "
-                + (f"now {inr(p)}" if p is not None else "no fresh price right now")
-                + (f", {lowest_text(h, tz)}" if h["lowest"] is not None else "")
-                + ". Fares usually rise near departure.")
-    return text + (" ⚠️ unverified" if h.get("unverified") else "")
+        text = (f"⏰ {h['days_left']} days to go: "
+                + (f"now {inr(p)}" if p is not None else "I couldn't get today's price")
+                + (f" ({lowest_text(h, tz)})" if h["lowest"] is not None else "")
+                + ". Fares usually rise from here, so book soon.")
+    return text + (" ⚠️ price not confirmed" if h.get("unverified") else "")
 
 
 def message(cfg, r, hits):
@@ -197,6 +198,6 @@ def message(cfg, r, hits):
     bits = []
     if o := head.get("obs"):
         bits.append(flight_text(o))
-    bits += [gf_link(r, head["day"]), "indicative, confirm on booking page"]
+    bits += [gf_link(r, head["day"]), "check the final price before booking"]
     lines.append(" · ".join(bits))
     return for_owner(r, "\n".join(lines))

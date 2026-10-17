@@ -17,7 +17,7 @@ Send `/start` to get the menu:
 | 🔍 Flight Search | Asks for the departure city, the destination and the date, then shows the cheapest flights. **Costs one call.** |
 | 🔔 My Alerts | Lists your tracked routes. Tap a route for its buttons: 🔄 Check now, 🎯 Target, 📜 History, ⏸ Pause / ▶️ Resume, ❌ Delete |
 | 🎯 Set Target | Asks which route, then the target price (and optional buffer) |
-| 📊 Status | API health, money spent this month and free calls left (admin only) |
+| 📊 Status | API health, money spent this month and free calls left (shown to the admin only) |
 | ❓ Help | Lists the commands |
 
 **Search walkthrough:**
@@ -45,13 +45,13 @@ Only the origin, destination and date are required.
 | `flight=6E2134` | Only this flight. Tracking stops after it departs | any |
 | `time=06-12` | Departure between 06:00 and 12:00 | any |
 | `every=120` | Check D every 120 min instead of the global value | `anchor_every_min` (30) |
-| `force` | Track even if the projected spend would cross the hard stop | off |
+| `force` | Track even if the projected spend would cross the hard stop (admin only; ignored for others) | off |
 
 ### Commands
 | Command | Effect |
 |---|---|
 | `/list` | Your routes with their latest price (same as 🔔 My Alerts) |
-| `/history` | Every check of a route: time, auto/manual/re-check, price or error, and which alert it sent |
+| `/history` | Every check of a route: time, price (or "couldn't check"), and 🔔 if it sent an alert |
 | `/checknow` | Check a route right now (1 call; `checknow_per_user_day` per user per day) |
 | `/settarget` | Set a target: `/settarget 4200`, `/settarget 8000 500` (alert at ≤ ₹8,500) or `/settarget off` |
 | `/status`, `/reload` | Admin only: health and spend; re-read the config |
@@ -69,7 +69,7 @@ A route expires on its own once its date passes, or, for a `flight=` route, once
 
 One check sends at most one message. The same alert is not repeated unless the price falls by at least another ₹100 or 3% (whichever is larger), or a near-target fare reaches the target. If the deal goes away and comes back, it alerts again.
 
-Before alerting a cached price, or a price more than 30% below the lowest seen, the bot searches once more to confirm it. If that second search fails, the alert is marked ⚠️ unverified.
+Before alerting a cached price, or a price more than 30% below the lowest seen, the bot searches once more to confirm it. If that second search fails, the alert is marked ⚠️ price not confirmed.
 
 Each alert includes a Google Flights link. **Book on the airline's website.** The bot only watches prices.
 
@@ -105,7 +105,7 @@ With the defaults (active 08–23, a check every 30 min, ₹0.23 a call), one ro
 
 Dates more than 45 days away are checked 3× less often (`far_out_days`, `far_out_slowdown`), so they cost less until they get close.
 
-With the default cap (₹750) and hard stop (90% = ₹675), you can run about 3 routes at the default rate. When the next one would cross the hard stop, `/track` refuses it. Choose one:
+With the default cap (₹750) and hard stop (90% = ₹675), you can run about 3 routes at the default rate. When the next one would cross the hard stop, the route isn't saved: the user just sees "Not saved. Something went wrong, please try again." and the bot log gets a warning with the projected spend. As admin, choose one:
 - Slow it down with `every=120`.
 - Raise `monthly_cap_inr`.
 - Add `force` and accept that checks will stop for the rest of the month once ₹675 is reached.

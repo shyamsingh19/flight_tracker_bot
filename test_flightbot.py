@@ -188,14 +188,14 @@ class TestRules(Base):
     def test_message_basics(self):
         rid = self.route(target_inr=5000)
         msg = self.check(rid, [offer(4900, flight="AI559")], at("2026-12-01", 9))[0]
-        for want in ["Sun 20 Dec", "₹4,900", "AI559 06:10", "indicative, confirm on booking page"]:
+        for want in ["Sun 20 Dec", "₹4,900", "AI559 06:10", "check the final price before booking"]:
             self.assertIn(want, msg)
 
     def test_target_buffer(self):
         rid = self.route(target_inr=4500)
         self.assertFalse(self.check(rid, 4500 + self.cfg["deal"]["target_buffer_inr"] + 1, at("2026-12-01", 9)))
         msg = self.check(rid, 4600, at("2026-12-01", 10))
-        self.assertIn("within ₹100 of your target ₹4,500", msg[0])
+        self.assertIn("just ₹100 above your target ₹4,500", msg[0])
         db.update_route(rid, target_buffer_inr=0)  # per-route buffer beats the config default
         self.assertFalse(self.check(rid, 4501, at("2026-12-01", 11)))
 
@@ -204,7 +204,7 @@ class TestRules(Base):
         self.assertIn("❓", bot.set_target(db.route(rid), "abc"))
         self.assertIn("₹8,000", bot.set_target(db.route(rid), "8000"))
         self.assertEqual(db.route(rid)["target_inr"], 8000)
-        self.assertIn("at or below ₹8,500", bot.set_target(db.route(rid), "₹8,000 +500"))
+        self.assertIn("₹8,000", bot.set_target(db.route(rid), "₹8,000 +500"))
         self.assertEqual(db.route(rid)["target_buffer_inr"], 500)
         bot.set_target(db.route(rid), "OFF")
         self.assertIsNone(db.route(rid)["target_inr"])
@@ -224,11 +224,9 @@ class TestRules(Base):
         self.check(rid, 0, at("2026-12-01", 10), kind="manual")
         self.fake.error = None
         text = bot.history_text(self.cfg, db.route(rid))
-        self.assertIn("manual", text)
-        self.assertIn("❌ HTTP 500 &lt;oops&gt;", text)
-        self.assertIn("auto", text)
-        self.assertIn("₹4,000", text)
-        self.assertIn("🔔 target", text)
+        self.assertIn("10:00: couldn't check", text)
+        self.assertNotIn("HTTP", text)  # no internals for users
+        self.assertIn("₹4,000 6E2134 🔔", text)
         self.cfg["ui"]["history_default_n"] = 500
         for i in range(300):
             self.check(rid, 5000 + i, at("2026-12-01", 10))
@@ -251,13 +249,13 @@ class TestRules(Base):
         self.assertEqual(db.one("SELECT valid FROM observations WHERE price_inr=4500")["valid"], 0)
         msg = self.check(rid, [[offer(4000, status="unverified")], [offer(4050)]], at("2026-12-01", 11))  # within 2%
         self.assertIn("₹4,050", msg[0])
-        self.assertNotIn("unverified", msg[0])
+        self.assertNotIn("not confirmed", msg[0])
 
     def test_recheck_failed_sends_unverified(self):
         rid = self.route(target_inr=4600)
         msg = self.check(rid, [[offer(4500, status="unverified")], providers.ProviderError("HTTP 500", 500)],
                          at("2026-12-01", 10))
-        self.assertIn("⚠️ unverified", msg[-1])
+        self.assertIn("⚠️ price not confirmed", msg[-1])
         self.assertIsNone(db.one("SELECT valid FROM observations WHERE price_inr=4500")["valid"])
         self.assertEqual(db.alert_states(rid), {})  # re-alert state not updated with that price
         self.assertEqual(self.alerts_of("target")[0]["unverified"], 1)
@@ -271,14 +269,14 @@ class TestRules(Base):
 
     def test_too_close_to_departure_is_invalid(self):
         rid = self.route(target_inr=4600)
-        self.assertNotIn("TARGET", "".join(self.check(rid, [offer(4000, dep="10:00")], at("2026-12-20", 8))))
+        self.assertNotIn("🎯", "".join(self.check(rid, [offer(4000, dep="10:00")], at("2026-12-20", 8))))
         self.assertEqual(db.one("SELECT valid FROM observations")["valid"], 0)
 
     def test_book_by_once(self):
         rid = self.route()
         self.fake.prices[D] = 5000
         msgs = sent(checker.run_due(self.cfg, at("2026-12-06", 8)))  # 14 days before D
-        self.assertEqual(sum("BOOK BY" in m for m in msgs), 1)
+        self.assertEqual(sum("days to go" in m for m in msgs), 1)
         self.assertIn("now ₹5,000", msgs[0])
         self.assertFalse(self.check(rid, 5000, at("2026-12-06", 9)))
 
@@ -289,7 +287,7 @@ class TestRules(Base):
         self.assertFalse(self.check(rid, 5000, at("2026-12-01", 9)))  # the n-th price: context had n-1
         msg = self.check(rid, 4900, at("2026-12-01", 10))
         self.assertEqual(len(msg), 1)
-        self.assertIn("NEW LOW", msg[0])
+        self.assertIn("Lowest price so far", msg[0])
         self.assertEqual(self.fake.calls, [D, D])  # no extra searches of other dates
         self.assertNotIn("bag", msg[0])
 

@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.request import urlopen
 from zoneinfo import ZoneInfo
 
-from telegram import BotCommand, InlineKeyboardButton as Btn, InlineKeyboardMarkup as Kb, LinkPreviewOptions, Update
+from telegram import BotCommand, BotCommandScopeChat, InlineKeyboardButton as Btn, InlineKeyboardMarkup as Kb, LinkPreviewOptions, Update
 from telegram.constants import MessageLimit, ParseMode
 from telegram.error import TelegramError
 from telegram.warnings import PTBUserWarning
@@ -34,29 +34,37 @@ CONFIG_PATH = os.environ.get("CONFIG_PATH", "config.toml")
 log = logging.getLogger("bot")
 
 HELP = """✈️ <b>Flight price alert</b>
+I watch flight prices for your date and message you when it's a good time to book.
 
 🔍 <b>Find &amp; track</b>
-/search — guided: city → city → date → track
-/track <code>HYD DEL 2026-12-20</code> — track directly
-<i>Optional extras for /track:</i>
-  <code>target=4500</code> — alert at or below ₹4500
-  <code>stops=0</code> — max stops
-  <code>airline=6E</code> · <code>flight=6E2134</code>
-  <code>time=06-12</code> — departure window (hours)
-  <code>every=120</code> — check every 120 min
-  <code>force</code> — allow over the cost cap
+/search — find flights and track the price
+/track <code>HYD DEL 2026-12-20</code> — track a route directly
+<i>You can add:</i>
+  <code>target=4500</code> — tell me when it's ₹4,500 or less
+  <code>stops=0</code> — direct flights only
+  <code>airline=6E</code> or <code>flight=6E2134</code> — one airline or flight
+  <code>time=06-12</code> — departing between 06:00 and 12:00
 
 📋 <b>Your routes</b>
-/list — your tracked routes; tap one to pause, resume or delete it
-/history — every check of a route, with its result
-/checknow — check a route right now
-/settarget [<code>4500</code> [buffer] · <code>off</code>]
-<i>These ask which route with a button each.</i>
-<i>Each route watches one date. For another day, track it too.</i>
+/list — your routes; tap one to pause, resume or delete it
+/checknow — check a price right now
+/settarget — set the price you want to pay
+/history — past price checks
+<i>Each route is one date. For another day, track that day too.</i>"""
+ADMIN_HELP = """
 
-⚙️ <b>System</b>
+⚙️ <b>Admin</b>
 /status — health and spend
-/reload — re-read config, show projected cost"""
+/reload — re-read config, show projected cost
+/track extras: <code>every=120</code> (minutes between checks), <code>force</code> (save over the cost cap)"""
+
+
+def is_admin(uid):
+    return uid == int(os.environ["ALLOWED_USER_ID"])
+
+
+def help_text(uid):
+    return HELP + (ADMIN_HELP if is_admin(uid) else "")
 
 
 class JsonLog(logging.Formatter):
@@ -104,12 +112,9 @@ def route_card(r, now):
     """/list view: the route and its latest price."""
     head = f"<b>{route_name(r)}</b>"
     if r["target_inr"]:
-        buf = r["target_buffer_inr"]
-        head += f" · 🎯 {inr(r['target_inr'])}" + (f" (+{inr(buf)})" if buf is not None else "")
+        head += f" · 🎯 {inr(r['target_inr'])}"
     if r["status"] != "active":
         head += f" · {r['status']}"
-    if r["consecutive_failures"]:
-        head += f" · ⚠️ {r['consecutive_failures']} failures"
     return f"{head}\n{price_text(latest_any(r['id'], r['anchor_date']), now)}"
 
 
@@ -148,7 +153,7 @@ async def pick(update, ctx, cmd):
     rest = " ".join(ctx.args or [])[:40]  # callback_data is capped at 64 bytes
     kb = Kb([[Btn(route_name(r) + (" · paused" if r["status"] == "paused" else ""),
                   callback_data=f"p:{cmd}:{r['id']}:{rest}")] for r in rows])
-    await say_kb(update, f"Which route for /{cmd}?", kb)
+    await say_kb(update, "Which route?", kb)
     return None
 
 
@@ -159,7 +164,7 @@ async def say(update, text):
 # ---------------------------------------------------------------- commands
 
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await say(update, HELP)
+    await say(update, help_text(update.effective_user.id))
 
 
 def parse_track(cfg, args, today):
@@ -202,7 +207,8 @@ async def cmd_track(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         route, force = parse_track(cfg, ctx.args, checker.local(cfg, now).date())
     except ValueError as e:
         return await say(update, f"❌ {html.escape(str(e))}")
-    await say(update, save_route(cfg, route | {"owner_id": update.effective_user.id}, force, now))
+    uid = update.effective_user.id
+    await say(update, save_route(cfg, route | {"owner_id": uid}, force and is_admin(uid), now))
 
 
 def save_route(cfg, route, force, now):
@@ -211,9 +217,9 @@ def save_route(cfg, route, force, now):
     after = checker.projected(cfg, now, extra=route)
     stop = budget.hard_stop_inr(cfg)
     if after > stop and not force:
-        return (f"❌ Not saved. With this route, projected spend is {inr(after)}/month, over the "
-                f"{inr(stop)} hard stop. Raise [budget] monthly_cap_inr in config.toml and /reload, "
-                f"use every=120, or add 'force' to /track.")
+        log.warning("route %s not saved for user %s: projected %s/month is over the %s hard stop",
+                    route_name(route), route.get("owner_id"), inr(after), inr(stop))
+        return "❌ Not saved. Something went wrong, please try again."
     db.insert("routes", route)
     sch, every = cfg["schedule"], checker.anchor_every(cfg, route)
     slow = checker.slowdown(cfg, route, now)
@@ -243,9 +249,8 @@ async def target_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     ctx.user_data["target_rid"] = r["id"]
     await update.effective_message.reply_text(
-        f"🎯 {route_line(r, now_utc())}\n\nSend the target price in ₹ (e.g. 8000), optionally with a buffer "
-        f"(e.g. 8000 500 alerts at or below ₹8,500; default buffer {inr(cfg_of(ctx)['deal']['target_buffer_inr'])}), "
-        f"or \"off\" to remove it.")
+        f"🎯 {route_name(r)}\n\nWhat price do you want to pay? Send it in ₹, e.g. 8000. "
+        f"I'll message you when the fare gets there or close. Send \"off\" to remove the target.")
     return TARGET
 
 
@@ -262,20 +267,16 @@ def set_target(r, text):
     nums = text.lower().replace(",", "").replace("₹", "").replace("+", " ").split()
     if nums == ["off"]:
         db.update_route(r["id"], target_inr=None, target_buffer_inr=None)
-        return f"🎯 {route_name(r)}: target off"
+        return f"🎯 {route_name(r)}: target removed."
     if not (1 <= len(nums) <= 2 and all(n.isdigit() for n in nums)):
-        return "❓ Send a price like 8000, a price and buffer like 8000 500, or \"off\"."
+        return "❓ Send a price like 8000, or \"off\"."
     target, buf = int(nums[0]), int(nums[1]) if len(nums) > 1 else None
     db.update_route(r["id"], target_inr=target, target_buffer_inr=buf)
-    return (f"🎯 {route_name(r)}: target {inr(target)}"
-            + (f", alerts at or below {inr(target + buf)}" if buf is not None else " (default buffer)"))
-
-
-KIND = {"anchor": "auto", "manual": "manual", "recheck": "re-check"}
+    return f"🎯 {route_name(r)}: I'll message you when it's {inr(target)} or close to it."
 
 
 def history_text(cfg, r):
-    """/history: the last history_default_n checks of a route: time, kind, result, and which ones alerted."""
+    """/history: the last history_default_n checks of a route: time, result, and which ones alerted."""
     tz = ZoneInfo(cfg["schedule"]["timezone"])
     rows = db.q("SELECT o.*, GROUP_CONCAT(a.rule) AS fired FROM observations o "
                 "LEFT JOIN alerts a ON a.observation_id=o.id WHERE o.route_id=? "
@@ -283,11 +284,10 @@ def history_text(cfg, r):
                 (r["id"], cfg["ui"]["history_default_n"]))
     lines = []
     for o in reversed(rows):
-        res = (f"{inr(o['price_inr'])} {o['flight_no']}" + (" (cached)" if o["cache_hit"] else "")
-               if o["price_inr"] is not None else ("❌ " if not o["ok"] else "") + html.escape(o["error"] or "—"))
-        lines.append(f"{parse(o['observed_at']).astimezone(tz):%d %b %H:%M} {KIND.get(o['kind'], o['kind'])}: "
-                     f"{res}" + (f" 🔔 {o['fired']}" if o["fired"] else ""))
-    head = f"📜 {route_name(r)} — last {len(rows)} checks"
+        res = (f"{inr(o['price_inr'])} {o['flight_no']}" if o["price_inr"] is not None
+               else "no matching flights" if o["ok"] else "couldn't check")
+        lines.append(f"{parse(o['observed_at']).astimezone(tz):%d %b %H:%M}: {res}" + (" 🔔" if o["fired"] else ""))
+    head = f"📜 {route_name(r)}: last {len(rows)} checks (🔔 = alert sent)"
     while lines and len(head) + sum(len(x) + 1 for x in lines) > MessageLimit.MAX_TEXT_LENGTH:
         lines.pop(0)  # keep the newest that fit in one message
     return "\n".join([head] + lines) if lines else f"📜 {route_name(r)}: no checks yet."
@@ -307,13 +307,14 @@ async def cmd_checknow(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return await say(update, why)
     await say(update, f"Checking {day_label(r['anchor_date'])}…")
     msgs = await asyncio.to_thread(checker.check_now, cfg, r["id"], now)
-    for m in msgs:  # alerts go to the route's owner, like a scheduled check
-        await (send(ctx, m) if isinstance(m, alerts.Flight) else say(update, m))
+    for m in msgs:  # alerts to the route's owner, notices (failures, budget) to the admin, like a scheduled check
+        await send(ctx, m)
     o = db.one("SELECT * FROM observations WHERE route_id=? AND kind='manual' AND observed_at=? "
                "ORDER BY id DESC LIMIT 1", (r["id"], iso(now)))
-    await say(update, f"{day_label(r['anchor_date'])} " + (
-        inr(o["price_inr"]) + f" {o['flight_no']}" if o and o["price_inr"] is not None
-        else html.escape(o["error"] or "") if o else "skipped"))
+    await say(update, f"{day_label(r['anchor_date'])}: " + (
+        f"{inr(o['price_inr'])} ({o['flight_no']})" if o and o["price_inr"] is not None
+        else "no flights match this route right now." if o and o["ok"]
+        else "I couldn't get the price right now. Please try again later."))
 
 
 def checknow_quota(cfg, uid, now):
@@ -322,7 +323,7 @@ def checknow_quota(cfg, uid, now):
     key = f"checknow:{uid}:{checker.local(cfg, now).date()}"
     used = int(db.kv_get(key) or 0)
     if used >= limit:
-        return f"⛔ Daily manual-check limit: {used}/{limit} used today. Resets at midnight."
+        return f"⛔ You've used all {limit} checks for today. Try again tomorrow."
     db.kv_set(key, str(used + 1))
     return None
 
@@ -380,7 +381,7 @@ def alert_ids():
 async def gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Runs before every handler: the admin gets everything, ALERT_USER_IDS everything but ADMIN_ONLY, others nothing."""
     u = update.effective_user
-    if u and u.id == int(os.environ["ALLOWED_USER_ID"]):
+    if u and is_admin(u.id):
         return
     if not u or u.id not in alert_ids():
         log.warning("ignored update from unauthorized user %s (%s)", u.id if u else None, u.username if u else None)
@@ -446,13 +447,15 @@ def parse_day(text, today):
     return day if day >= today else date(today.year + 1, int(mo), int(d))
 
 
-MENU = Kb([[Btn("🔍 Flight Search", callback_data="menu:search"), Btn("🔔 My Alerts", callback_data="menu:alerts")],
-           [Btn("🎯 Set Target", callback_data="menu:target"), Btn("📊 Status", callback_data="menu:status")],
-           [Btn("❓ Help", callback_data="menu:help")]])
+def menu(uid):
+    return Kb([[Btn("🔍 Flight Search", callback_data="menu:search"), Btn("🔔 My Alerts", callback_data="menu:alerts")],
+               [Btn("🎯 Set Target", callback_data="menu:target"), Btn("❓ Help", callback_data="menu:help")]]
+              + ([[Btn("📊 Status", callback_data="menu:status")]] if is_admin(uid) else []))
 
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.effective_message.reply_text("✈️ Alright, please choose what we will do 👇", reply_markup=MENU)
+    await update.effective_message.reply_text("✈️ Alright, please choose what we will do 👇",
+                                              reply_markup=menu(update.effective_user.id))
 
 
 async def menu_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -465,9 +468,10 @@ async def menu_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif what == "status":
         await q.message.reply_text(status_text(cfg_of(ctx), now_utc()))
     elif what == "help":
-        await q.message.reply_text(HELP)
+        await q.message.reply_text(help_text(update.effective_user.id))
     else:
-        await q.message.reply_text("✈️ Alright, please choose what we will do 👇", reply_markup=MENU)
+        await q.message.reply_text("✈️ Alright, please choose what we will do 👇",
+                                   reply_markup=menu(update.effective_user.id))
 
 
 async def search_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -522,7 +526,8 @@ async def search_day(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         s["offers"] = await asyncio.to_thread(run_search, cfg, s["o"], s["d"], s["day"], now)
     except providers.ProviderError as e:
-        await say(update, f"⚠️ Search failed: {html.escape(e.message)}")
+        log.warning("search %s→%s %s failed: %s", s["o"], s["d"], s["day"], e.message)
+        await say(update, "⚠️ I couldn't search right now. Please try again later.")
         return ConversationHandler.END
     text, kb = results_view(cfg, s, update.effective_user.id)
     await say_kb(update, text, kb)
@@ -588,7 +593,8 @@ async def search_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     route, _ = parse_track(cfg, [s["o"], s["d"], s["day"]] + (["stops=0"] if s["direct"] else []),
                            checker.local(cfg, now).date())
     await q.message.reply_text(save_route(cfg, route | {"owner_id": uid}, False, now))
-    await q.edit_message_reply_markup(results_view(cfg, s, update.effective_user.id)[1])
+    if tracked(s, uid):  # not saved → same buttons, and Telegram rejects an edit that changes nothing
+        await q.edit_message_reply_markup(results_view(cfg, s, uid)[1])
 
 
 def tracked(s, uid):
@@ -636,7 +642,7 @@ async def route_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not (r := own_route(update, int(rid))):
         return await q.answer("Route not found")
     db.update_route(r["id"], status=status)
-    await q.answer(f"{route_name(r)} → {status}")
+    await q.answer({"active": "Resumed", "paused": "Paused", "deleted": "Deleted"}[status])
     now = now_utc()
     text, kb = route_view(db.route(r["id"]), now) if status != "deleted" else \
         alerts_view(update.effective_user.id, now)
@@ -752,13 +758,13 @@ async def on_error(update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def post_init(app):
-    await app.bot.set_my_commands([BotCommand("start", "Menu"), BotCommand("search", "Guided flight search"),
-                                   BotCommand("list", "My price alerts"),
-                                   BotCommand("settarget", "Set a target price (+ buffer)"),
-                                   BotCommand("history", "Every check of a route"),
-                                   BotCommand("checknow", "Check a route right now"),
-                                   BotCommand("status", "Health and spend"),
-                                   BotCommand("help", "All commands")])
+    cmds = [BotCommand("start", "Menu"), BotCommand("search", "Find flights"),
+            BotCommand("list", "My price alerts"), BotCommand("settarget", "Set the price you want to pay"),
+            BotCommand("checknow", "Check a price now"), BotCommand("history", "Past price checks"),
+            BotCommand("help", "How it works")]
+    await app.bot.set_my_commands(cmds)
+    await app.bot.set_my_commands(cmds + [BotCommand("status", "Health and spend")],
+                                  scope=BotCommandScopeChat(int(os.environ["ALLOWED_USER_ID"])))
     if app.bot_data["cfg"]["monitoring"]["admin_notices"]:
         await app.bot.send_message(int(os.environ["ALLOWED_USER_ID"]),
                                    f"🟢 Bot started. {projection_text(app.bot_data['cfg'], now_utc())}")
