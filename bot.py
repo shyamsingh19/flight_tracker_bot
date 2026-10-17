@@ -208,16 +208,19 @@ async def cmd_track(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 def save_route(cfg, route, force, now):
     """Insert a parsed route unless it would push projected spend past the hard stop → reply text."""
     route["created_at"] = iso(now)
-    before, after = checker.projected(cfg, now), checker.projected(cfg, now, extra=route)
+    after = checker.projected(cfg, now, extra=route)
     stop = budget.hard_stop_inr(cfg)
     if after > stop and not force:
         return (f"❌ Not saved. With this route, projected spend is {inr(after)}/month, over the "
                 f"{inr(stop)} hard stop. Raise [budget] monthly_cap_inr in config.toml and /reload, "
                 f"use every=120, or add 'force' to /track.")
     db.insert("routes", route)
-    return (f"✅ Tracking {route_name(route)}. This route ≈ {inr(after - before)}"
-            f"/month; all routes {inr(after)} (cap {inr(cfg['budget']['monthly_cap_inr'])}). First check "
-            f"within a minute if inside active hours.")
+    sch, every = cfg["schedule"], checker.anchor_every(cfg, route)
+    slow = checker.slowdown(cfg, route, now)
+    a, b = sch["active_hours"]
+    later = f" (every {every} min once it's {sch['far_out_days']} days away)" if slow > 1 else ""
+    return (f"✅ Tracking {route_name(route)}. I'll check the price every {every * slow} min{later}, "
+            f"between {a:02d}:00 and {b:02d}:00, and message you when it's a good time to book.")
 
 
 async def cmd_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -302,7 +305,7 @@ async def cmd_checknow(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     cfg, now = cfg_of(ctx), now_utc()
     if why := checknow_quota(cfg, update.effective_user.id, now):
         return await say(update, why)
-    await say(update, f"Checking {day_label(r['anchor_date'])}, ≈ ₹{config.per_call_inr(cfg):.2f}…")
+    await say(update, f"Checking {day_label(r['anchor_date'])}…")
     msgs = await asyncio.to_thread(checker.check_now, cfg, r["id"], now)
     for m in msgs:  # alerts go to the route's owner, like a scheduled check
         await (send(ctx, m) if isinstance(m, alerts.Flight) else say(update, m))
