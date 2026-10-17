@@ -27,7 +27,7 @@ def at(day, hh, mm=0):
     return datetime.fromisoformat(f"{day}T{hh:02d}:{mm:02d}").replace(tzinfo=IST).astimezone(UTC)
 
 
-def offer(price, day=D, flight="6E2134", dep="06:10", status="verified", bags=1, stops=0):
+def offer(price, day=D, flight="6E2134", dep="06:10", status="verified", bags=1, stops=0):  # bags: as Ignav sends it
     return {"price_inr": price, "price_status": status, "airline": flight[:2], "flight_no": flight,
             "dep_local": f"{day}T{dep}:00", "stops": stops, "bags": bags}
 
@@ -37,7 +37,7 @@ class Fake:
     def __init__(self):
         self.prices, self.calls, self.error, self.cache = {}, [], None, False
 
-    def __call__(self, cfg, o, d, day, stops, bags):
+    def __call__(self, cfg, o, d, day, stops):
         self.calls.append(day)
         if self.error:
             raise self.error
@@ -82,11 +82,11 @@ class Base(unittest.TestCase):
         return sent(checker.scan(self.cfg, db.route(rid), kind, now))
 
     def seed(self, rid, now, n=25, price=6000):
-        """n scheduled baseline samples of D over the 2 days before now."""
+        """n valid prices of D over the 2 days before now."""
         for i in range(n):
             when = now - timedelta(days=2, hours=i)
             db.add_observation({"route_id": rid, "depart_date": D, "kind": "anchor", "ok": 1, "provider": "ignav",
-                                "observed_at": db.iso(when), "price_inr": price + 10 * i, "baseline_slot": db.iso(when)})
+                                "observed_at": db.iso(when), "price_inr": price + 10 * i})
 
 
 class TestConfig(Base):
@@ -217,22 +217,22 @@ class TestRules(Base):
         self.assertIsNone(bot.checknow_quota(self.cfg, 2, now))  # per user
         self.assertIsNone(bot.checknow_quota(self.cfg, 1, at("2026-12-02", 9)))  # new day
 
-    def test_calls_log(self):
+    def test_history_log(self):
         rid = self.route(target_inr=4500)
         self.check(rid, 4000, at("2026-12-01", 9))
         self.fake.error = providers.ProviderError("HTTP 500 <oops>", 500)
         self.check(rid, 0, at("2026-12-01", 10), kind="manual")
         self.fake.error = None
-        text = bot.calls_text(self.cfg, db.route(rid))
+        text = bot.history_text(self.cfg, db.route(rid))
         self.assertIn("manual", text)
         self.assertIn("❌ HTTP 500 &lt;oops&gt;", text)
-        self.assertIn("anchor", text)
+        self.assertIn("auto", text)
         self.assertIn("₹4,000", text)
         self.assertIn("🔔 target", text)
         self.cfg["ui"]["history_default_n"] = 500
         for i in range(300):
             self.check(rid, 5000 + i, at("2026-12-01", 10))
-        self.assertLessEqual(len(bot.calls_text(self.cfg, db.route(rid))), 4096)
+        self.assertLessEqual(len(bot.history_text(self.cfg, db.route(rid))), 4096)
 
     def test_below_target_realert(self):
         rid = self.route(target_inr=4500)
@@ -282,34 +282,16 @@ class TestRules(Base):
         self.assertIn("now ₹5,000", msgs[0])
         self.assertFalse(self.check(rid, 5000, at("2026-12-06", 9)))
 
-    def test_grade(self):
-        base = list(range(5000, 6000, 50))
-        self.assertEqual(alerts.grade(self.cfg, 4900, base)["level"], "great")
-        self.assertEqual(alerts.grade(self.cfg, 5100, base)["level"], "good")
-        self.assertIsNone(alerts.grade(self.cfg, 5300, base))
-        self.assertIsNone(alerts.grade(self.cfg, 4900, base[:19]))  # below min_samples
-        self.assertIsNone(alerts.grade(self.cfg, 5000, [5000] * 25))  # a flat price is never a deal
-
-    def test_baseline_is_one_scheduled_sample_per_slot_of_d(self):
+    def test_new_low_waits_for_min_samples(self):
         rid = self.route()
-        now = at("2026-12-10", 9)
-        slot = db.iso(now)
-        for day, when, price, slot_ in [(D, now - timedelta(days=31), 1, db.iso(now - timedelta(days=31))),
-                                        ("2026-12-19", now, 2, slot), (D, now, 5000, slot), (D, now, 3, slot),
-                                        (D, now, 4, None)]:
-            db.add_observation({"route_id": rid, "depart_date": day, "kind": "anchor", "observed_at": db.iso(when),
-                                "provider": "ignav", "ok": 1, "price_inr": price, "baseline_slot": slot_})
-        self.assertEqual(checker.context(self.cfg, db.route(rid), now)["baseline"], [5000])
-
-    def test_good_deal_one_message(self):
-        rid = self.route()
-        now = at("2026-12-01", 15)
-        self.seed(rid, now)
-        msg = self.check(rid, 5000, now)
-        self.assertEqual(self.fake.calls, [D])  # no extra searches of other dates
+        n = self.cfg["deal"]["min_samples"]
+        self.seed(rid, at("2026-12-01", 9), n=n - 1)
+        self.assertFalse(self.check(rid, 5000, at("2026-12-01", 9)))  # the n-th price: context had n-1
+        msg = self.check(rid, 4900, at("2026-12-01", 10))
         self.assertEqual(len(msg), 1)
-        self.assertIn("GREAT DEAL", msg[0])
         self.assertIn("NEW LOW", msg[0])
+        self.assertEqual(self.fake.calls, [D, D])  # no extra searches of other dates
+        self.assertNotIn("bag", msg[0])
 
 
 class TestMoneyAndFailures(Base):
@@ -339,6 +321,19 @@ class TestMoneyAndFailures(Base):
         self.check(rid, 6000, at("2026-12-01", 13))
         self.assertEqual(db.route(rid)["consecutive_failures"], 0)
 
+    def test_crash_in_one_route_spares_the_others_and_is_billed(self):
+        bad, good = self.route(), self.route(destination="BOM")
+        orig = providers.cheapest
+        providers.cheapest = lambda offers, r, stops: 1 / 0 if r["id"] == bad else orig(offers, r, stops)
+        try:
+            msgs = checker.run_due(self.cfg, at("2026-12-01", 9))
+        finally:
+            providers.cheapest = orig
+        self.assertEqual(len(self.fake.calls), 2)
+        self.assertEqual(budget.calls_used(), 2)  # the crashed call is still in the spend ledger
+        self.assertTrue(any("crashed" in m and not isinstance(m, alerts.Flight) for m in msgs))  # admin only
+        self.assertIsNotNone(db.route(good)["last_anchor_at"])
+
     def test_429_pauses(self):
         rid = self.route()
         self.fake.error = providers.ProviderError("HTTP 429", 429)
@@ -350,15 +345,33 @@ class TestMoneyAndFailures(Base):
         self.assertEqual(len(self.fake.calls), 2)
 
 
+class TestMigration(Base):
+    def test_old_columns_and_rule_rows_are_dropped(self):
+        with db.tx() as c:  # what a database from before 2026-10-17 has
+            c.execute("ALTER TABLE routes ADD COLUMN calibration INTEGER NOT NULL DEFAULT 0")
+            c.execute("ALTER TABLE routes ADD COLUMN min_bags INTEGER")
+            c.execute("ALTER TABLE observations ADD COLUMN baseline_slot TEXT")
+            c.execute("CREATE UNIQUE INDEX obs_slot ON observations(route_id, depart_date, baseline_slot)"
+                      " WHERE baseline_slot IS NOT NULL")
+        rid = self.route()
+        db.run("INSERT INTO alert_state(route_id, rule, depart_date, alerted_at) VALUES(?, 'deal', ?, 'x')", (rid, D))
+        db.init()
+        db.init()  # idempotent
+        cols = lambda t: {r[1] for r in db.q(f"PRAGMA table_info({t})")}  # noqa: E731
+        self.assertFalse({"calibration", "min_bags"} & cols("routes"))
+        self.assertNotIn("baseline_slot", cols("observations"))
+        self.assertEqual(db.alert_states(rid), {})
+        self.check(rid, 6000, at("2026-12-01", 9))  # inserts still work
+
+
 class TestProvider(Base):
     def test_filters(self):
-        r = {"airline": None, "flight_no": None, "time_start": 6, "time_end": 12, "min_bags": 1}
-        offers = [offer(4000, dep="05:00"), offer(4100, dep="07:00", bags=0), offer(4200, dep="13:00"),
+        r = {"airline": None, "flight_no": None, "time_start": 6, "time_end": 12}
+        offers = [offer(4000, dep="05:00"), offer(4200, dep="13:00"),
                   offer(4300, dep="11:00", stops=1), offer(4400, dep="12:00")]
         self.assertEqual(providers.cheapest(offers, r, 0)["price_inr"], 4400)
         self.assertEqual(providers.cheapest(offers, r, 1)["price_inr"], 4300)
         self.assertIsNone(providers.cheapest(offers, r | {"airline": "AI"}, 1))
-        self.assertEqual(providers.cheapest([offer(4000, dep="07:00", bags=None)], r, 0)["price_inr"], 4000)
 
     def test_parse_fixture(self):
         data = json.loads((HERE / "fixtures" / "sample_oneway.json").read_text())
@@ -367,6 +380,14 @@ class TestProvider(Base):
         self.assertEqual(offers[3]["stops"], 1)
         self.assertEqual(offers[0]["flight_no"], "6E2134")
 
+    def test_dry_run_fixture_moves_to_searched_day(self):
+        os.environ["DRY_RUN"] = "1"
+        try:
+            offers, _, _ = providers.ignav_search(self.cfg, "HYD", "XXX", "2027-01-05", 1)  # sample: 20 Dec
+        finally:
+            del os.environ["DRY_RUN"]
+        self.assertTrue(all(o["dep_local"].startswith("2027-01-05") for o in offers))
+
     def test_malformed(self):
         orig = providers.post
         try:
@@ -374,7 +395,7 @@ class TestProvider(Base):
                         "status": "verified"}, "outbound": {"segments": []}}]}]:
                 providers.post = lambda cfg, body, bad=bad: (bad, 1)
                 with self.assertRaises(providers.ProviderError):
-                    providers.ignav_search(self.cfg, "HYD", "DEL", D, 1, None)
+                    providers.ignav_search(self.cfg, "HYD", "DEL", D, 1)
         finally:
             providers.post = orig
 
@@ -488,6 +509,14 @@ class TestGuidedFlow(Base):
             with self.assertRaises(bot.ApplicationHandlerStop):
                 asyncio.run(bot.gate(upd(uid, text), None))
         self.assertEqual(sent, ["⛔ Admin only."] * 2)  # stranger gets no reply
+
+    def test_backup_keeps_newest(self):
+        for i in range(1, 5):
+            bot.save_backup(2, date(2026, 12, i))
+        keep = Path(db.PATH).parent / "backups" / "keep-me.db"
+        keep.write_bytes(b"")
+        bot.save_backup(2, date(2026, 12, 5))
+        self.assertEqual(sorted(p.name for p in keep.parent.iterdir()), ["keep-me.db", "t-2026-12-04.db", "t-2026-12-05.db"])
 
     def test_app_wiring_builds(self):
         app = bot.build_app(self.cfg, "123:abc")

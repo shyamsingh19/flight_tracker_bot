@@ -5,17 +5,14 @@ Tables
   observations  One row per fetched price for one date. Only `valid` is ever updated.
                   valid          1 = usable, 0 = rejected (bad price or failed re-check),
                                  NULL = re-check could not run (sent as unverified; rules ignore it).
-                  baseline_slot  UTC start of the scheduled slot this row fills, else NULL.
-                                 At most one row per (route, date, slot); only these rows form
-                                 the GOOD/GREAT baseline. Manual checks and re-checks never do.
                   recheck_of     id of the observation this row re-checked, else NULL.
   alert_state   Re-alert memory, one row per (route, rule, date). Deleting a row resets it.
-                  rule: deal (GOOD/GREAT, level says which), new_low, target (level HIT/NEAR),
-                        book_by. Old rows may also hold cheaper_date (removed rule).
+                  rule: new_low, target (level HIT/NEAR), book_by. Rows of removed rules
+                        (deal, cheaper_date) are deleted by init().
   alerts        Every alert line sent. Lines sent in one message share `batch`.
   spend, kv     Unchanged.
 
-Derived, never stored: lowest seen, current price, baseline (see the query helpers).
+Derived, never stored: lowest seen, sample count, current price (see the query helpers).
 All timestamps are UTC ISO strings from iso(), so string comparison = time comparison.
 """
 import os
@@ -31,8 +28,8 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS routes(
   id INTEGER PRIMARY KEY, origin TEXT NOT NULL, destination TEXT NOT NULL, anchor_date TEXT NOT NULL,
   airline TEXT, flight_no TEXT, max_stops INTEGER,
-  time_start INTEGER, time_end INTEGER, min_bags INTEGER, target_inr INTEGER, target_buffer_inr INTEGER,
-  anchor_every_min INTEGER, calibration INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'active',
+  time_start INTEGER, time_end INTEGER, target_inr INTEGER, target_buffer_inr INTEGER,
+  anchor_every_min INTEGER, status TEXT NOT NULL DEFAULT 'active',
   created_at TEXT NOT NULL, last_anchor_at TEXT,
   consecutive_failures INTEGER NOT NULL DEFAULT 0, first_failure_at TEXT,
   last_fail_notify_at TEXT, owner_id INTEGER);
@@ -41,7 +38,7 @@ CREATE TABLE IF NOT EXISTS observations(
   kind TEXT NOT NULL, observed_at TEXT NOT NULL, provider TEXT NOT NULL, ok INTEGER NOT NULL, error TEXT,
   price_inr INTEGER, price_status TEXT, cache_hit INTEGER, airline TEXT, flight_no TEXT,
   dep_local TEXT, arr_local TEXT, stops INTEGER, bags INTEGER,
-  valid INTEGER, baseline_slot TEXT, recheck_of INTEGER REFERENCES observations(id));
+  valid INTEGER, recheck_of INTEGER REFERENCES observations(id));
 CREATE TABLE IF NOT EXISTS alerts(
   id INTEGER PRIMARY KEY, route_id INTEGER NOT NULL REFERENCES routes(id), observation_id INTEGER,
   rule TEXT NOT NULL, depart_date TEXT NOT NULL, price_inr INTEGER NOT NULL, saving_inr INTEGER,
@@ -63,7 +60,6 @@ ADDED_COLUMNS = {
     "observations": [
         ("arr_local", "TEXT"),  # 2026-10-13
         ("valid", "INTEGER"),
-        ("baseline_slot", "TEXT"),
         ("recheck_of", "INTEGER REFERENCES observations(id)"),
     ],
     "routes": [
@@ -78,15 +74,16 @@ ADDED_COLUMNS = {
     ],
 }
 
-# Columns of removed features (nearby dates, 2026-10-17). flex_days is NOT NULL, so old databases
-# must lose it or inserting a route fails.
+# Columns of removed features, 2026-10-17: nearby dates (flex_days is NOT NULL, so old databases
+# must lose it or inserting a route fails), the bags filter, the unused calibration flag and the
+# GOOD/GREAT baseline. An indexed column can't be dropped, so its index goes first (DROPPED_INDEXES).
 DROPPED_COLUMNS = {"routes": ["flex_days", "alt_date", "last_scan_at", "last_alt_at", "skip_next_scan",
-                              "last_burst_at"]}
+                              "last_burst_at", "min_bags", "calibration"],
+                   "observations": ["baseline_slot"]}
+DROPPED_INDEXES = ["obs_slot"]
 
 INDEXES = """
 CREATE INDEX IF NOT EXISTS obs_route_date ON observations(route_id, depart_date, observed_at);
-CREATE UNIQUE INDEX IF NOT EXISTS obs_slot
-  ON observations(route_id, depart_date, baseline_slot) WHERE baseline_slot IS NOT NULL;
 CREATE INDEX IF NOT EXISTS obs_lowest
   ON observations(route_id, depart_date, price_inr) WHERE valid = 1;
 CREATE INDEX IF NOT EXISTS alerts_route ON alerts(route_id, sent_at);
@@ -111,12 +108,6 @@ def iso(dt):
 
 def parse(s):
     return datetime.fromisoformat(s)
-
-
-def slot_start(dt, minutes):
-    """UTC start of the fixed-size slot containing dt, as an iso() string."""
-    secs = int(dt.timestamp())
-    return iso(datetime.fromtimestamp(secs - secs % (minutes * 60), UTC))
 
 
 # ---------- connections ----------
@@ -152,31 +143,23 @@ def init():
             for name, decl in cols:
                 if name not in have:
                     c.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+        for name in DROPPED_INDEXES:
+            c.execute(f"DROP INDEX IF EXISTS {name}")
         for table, cols in DROPPED_COLUMNS.items():
             have = {r[1] for r in c.execute(f"PRAGMA table_info({table})")}
             for name in cols:
                 if name in have:
                     c.execute(f"ALTER TABLE {table} DROP COLUMN {name}")
         c.executescript(INDEXES)
+        with c:  # leftovers of removed rules
+            c.execute("DELETE FROM alert_state WHERE rule IN ('deal', 'cheaper_date')")
+            c.execute("DELETE FROM kv WHERE k='baseline_backfilled'")
         if c.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION:
             with c:
                 # One-time: rows from before `valid` existed are judged by the basic checks.
                 c.execute("UPDATE observations SET valid = CASE WHEN ok = 1 AND price_inr > 0"
                           " THEN 1 ELSE 0 END WHERE valid IS NULL")
                 c.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
-
-
-def backfill_baseline_slots(kinds, slot_minutes):
-    """Optional, run once after upgrading: give old scheduled rows a baseline slot so GOOD/GREAT
-    is not silent while the baseline refills. `kinds` = the observation kinds your scheduler
-    wrote for scheduled checks (not manual checks, not re-checks). First row in each slot wins."""
-    marks = ", ".join("?" * len(kinds))
-    rows = q(f"SELECT id, observed_at FROM observations WHERE baseline_slot IS NULL AND valid = 1"
-             f" AND recheck_of IS NULL AND kind IN ({marks}) ORDER BY observed_at, id", tuple(kinds))
-    with tx() as c:
-        for r in rows:
-            c.execute("UPDATE OR IGNORE observations SET baseline_slot=? WHERE id=?",
-                      (slot_start(parse(r["observed_at"]), slot_minutes), r["id"]))
 
 
 # ---------- generic helpers ----------
@@ -233,19 +216,12 @@ def backup(dest):
 # ---------- observations ----------
 
 def add_observation(row):
-    """Insert one fetched price. Sets `valid` from the basic checks unless the caller set it.
-    If row has a baseline_slot that is already filled for that date, the row is still stored
-    but without a slot, so each slot keeps exactly one baseline sample."""
+    """Insert one fetched price. Sets `valid` from the basic checks unless the caller set it."""
     row = dict(row)
     if "valid" not in row:
         price = row.get("price_inr")
         row["valid"] = int(bool(row.get("ok")) and isinstance(price, int) and price > 0)
-    with tx() as c:
-        if row.get("baseline_slot") and c.execute(
-                "SELECT 1 FROM observations WHERE route_id=? AND depart_date=? AND baseline_slot=?",
-                (row["route_id"], row["depart_date"], row["baseline_slot"])).fetchone():
-            row["baseline_slot"] = None
-        return _insert(c, "observations", row)
+    return insert("observations", row)
 
 
 def set_valid(obs_id, valid):
@@ -253,20 +229,12 @@ def set_valid(obs_id, valid):
     run("UPDATE observations SET valid=? WHERE id=?", (valid, obs_id))
 
 
-def baseline_prices(rid, depart_date, since):
-    """D's baseline: one valid scheduled sample per slot since `since`."""
-    return [r["price_inr"] for r in q(
-        "SELECT price_inr FROM observations WHERE route_id=? AND depart_date=? AND valid=1"
-        " AND baseline_slot IS NOT NULL AND observed_at>=?", (rid, depart_date, iso(since)))]
-
-
-def lowest_seen(rid, depart_date, exclude_id=None):
-    """(lowest valid price, first_seen) we recorded for this date, or (None, None).
-    Pass the current observation as exclude_id so it is compared against the past only."""
-    r = one("SELECT MIN(price_inr) AS price, MIN(observed_at) AS first_seen FROM observations"
-            " WHERE route_id=? AND depart_date=? AND valid=1 AND id IS NOT ?",
-            (rid, depart_date, exclude_id))
-    return (r["price"], r["first_seen"]) if r else (None, None)
+def lowest_seen(rid, depart_date):
+    """(lowest valid price, first_seen, number of valid prices) we recorded for this date;
+    (None, None, 0) if there are none."""
+    r = one("SELECT MIN(price_inr) AS price, MIN(observed_at) AS first_seen, COUNT(*) AS n FROM observations"
+            " WHERE route_id=? AND depart_date=? AND valid=1", (rid, depart_date))
+    return r["price"], r["first_seen"], r["n"]
 
 
 def current_price(rid, depart_date, fresh_since):

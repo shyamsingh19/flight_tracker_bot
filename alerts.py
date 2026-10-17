@@ -10,7 +10,7 @@ DEFINITIONS
                the search. Indicative only: confirm the final payable amount on the booking page.
   valid        Price is a positive integer, the date departs more than min_lead_h after now,
                and, if a re-check was required, it passed (see RE-CHECK). Invalid prices are
-               ignored everywhere: not stored as lowest, not alerted, not in the baseline.
+               ignored everywhere: not stored as lowest, not alerted.
   fresh        Fetched within freshness_h of now. A date's "current price" is its newest fresh
                valid price. A date with no fresh price is skipped this scan.
   step(p, a, b)  max(a, b × p). "Meaningfully lower than p" means ≤ p − step(p, a, b).
@@ -18,16 +18,11 @@ DEFINITIONS
   lowest seen  Lowest valid price this system has recorded for D, from any fetch, since
                first_seen. It is the lowest WE recorded, never a historical all-time low, and
                messages say so ("lowest we've recorded since <first_seen>").
-  baseline     D's prices from scheduled checks in the last baseline_days, one sample per
-               scheduled slot. Manual checks and re-checks never enter.
+  samples      How many valid prices we have recorded for D, from any fetch.
 
 RULES  (D = your date)
-  🟢 GOOD / GREAT  Silent until the baseline has min_samples samples.
-                   GOOD:  current price is strictly below the baseline's good_percentile AND
-                          meaningfully lower (realert step) than the baseline median.
-                   GREAT: same test with great_percentile.
-                   The strict "below" plus the median gap means a flat price is never a deal.
-  📉 NEW LOW       After min_samples. Current price is strictly below lowest seen.
+  📉 NEW LOW       Silent until D has min_samples samples, so the first noisy prices of a new
+                   route don't each alert. Current price is strictly below lowest seen.
                    (Replaces DROP: no false alarm when a spike recovers to a normal price.)
   🎯 TARGET        Routes with a target (/settarget price [buffer]; buffer defaults
                    to target_buffer_inr).
@@ -39,8 +34,8 @@ RULES  (D = your date)
                    rise near departure. If D has no fresh price, the message says so.
 
 RE-ALERT STATE  (one record per rule × date: last_alert_price, last_level)
-  Applies to GOOD/GREAT, NEW LOW and TARGET. The same rule and date alerts again only if:
-    - the level rises (GOOD → GREAT, NEAR → HIT), or
+  Applies to NEW LOW and TARGET. The same rule and date alerts again only if:
+    - the level rises (NEAR → HIT), or
     - the price is meaningfully lower (realert step) than last_alert_price, or
     - the deal went away and came back: once a fresh price ≥ last_alert_price + realert step
       is seen, the record is cleared, so the next qualifying price alerts as new.
@@ -48,7 +43,7 @@ RE-ALERT STATE  (one record per rule × date: last_alert_price, last_level)
 
 ONE MESSAGE PER SCAN
   All rules are evaluated together and produce at most one message. Headline by priority:
-    🎯 HIT > 🟢 GREAT > ⏰ BOOK BY > 🎯 NEAR > 🟢 GOOD > 📉 NEW LOW
+    🎯 HIT > ⏰ BOOK BY > 🎯 NEAR > 📉 NEW LOW
   Other rules that fired are listed as lines under the headline. Every message shows the date,
   price, airline (if known) and "indicative, confirm on booking page".
 
@@ -68,22 +63,22 @@ API CALLS
 CONFIG CHANGES vs previous version
   Added:   min_lead_h, deadline_days, suspicious_pct
   Removed: drop_abs_inr, drop_pct, drop_window_h (DROP replaced by NEW LOW);
-           nearby dates (flex, buffer scan, alternative watch, burst, CHEAPER DATE): one date per route
-  Changed: realert_abs_inr / realert_pct are combined as max(), and also set GOOD/GREAT's
-           minimum gap below the baseline median.
+           nearby dates (flex, buffer scan, alternative watch, burst, CHEAPER DATE): one date per route;
+           GOOD/GREAT deals and their baseline (baseline_days, good_percentile, great_percentile):
+           a fixed date's fares mostly rise towards departure, so comparing a price with the same
+           date's past prices was skewed, and NEW LOW already says "cheapest we've seen".
+  Changed: realert_abs_inr / realert_pct are combined as max().
 
 DELIVERY
   Messages go to the route's owner as Telegram text (bot.send), and are recorded in alerts /
   alert_state only after they were sent. Phone calls are not implemented yet.
 """
-import statistics
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-RANK = {None: 0, "good": 1, "near": 1, "great": 2, "hit": 2}
-REALERT = ("deal", "new_low", "target")  # rules that use RE-ALERT STATE
-PRIORITY = [("target", "hit"), ("deal", "great"), ("book_by", None), ("target", "near"), ("deal", "good"),
-            ("new_low", None)]
+RANK = {None: 0, "near": 1, "hit": 2}
+REALERT = ("new_low", "target")  # rules that use RE-ALERT STATE
+PRIORITY = [("target", "hit"), ("book_by", None), ("target", "near"), ("new_low", None)]
 
 
 def step(p, a, pct):
@@ -94,29 +89,7 @@ def realert_step(cfg, p):
     return step(p, cfg["deal"]["realert_abs_inr"], cfg["deal"]["realert_pct"])
 
 
-def percentile(xs, pct):
-    """Linear-interpolated value at pct (0–100) of xs."""
-    xs = sorted(xs)
-    k = (len(xs) - 1) * pct / 100
-    f = int(k)
-    return xs[f] + (xs[min(f + 1, len(xs) - 1)] - xs[f]) * (k - f)
-
-
-def grade(cfg, price, baseline):
-    """GOOD/GREAT test → {"level", "pct", "cut", "median", "n"}, or None (not a deal, or below min_samples)."""
-    d = cfg["deal"]
-    if len(baseline) < d["min_samples"]:
-        return None
-    med = statistics.median(baseline)
-    if price > med - realert_step(cfg, med):
-        return None
-    for level, pct in (("great", d["great_percentile"]), ("good", d["good_percentile"])):
-        if price < (cut := percentile(baseline, pct)):
-            return {"level": level, "pct": pct, "cut": cut, "median": med, "n": len(baseline)}
-    return None
-
-
-def decide(cfg, *, day, price, baseline, lowest, target, target_buffer, states, **_):
+def decide(cfg, *, day, price, samples, lowest, target, target_buffer, states, **_):
     """Rules for one fresh valid price of `day` → (fired, clear).
     fired: [{"rule", "level", "saving", ...message details}]; clear: rules whose state for `day`
     must be deleted because the deal went away. `states` is db.alert_states() for the route."""
@@ -131,12 +104,8 @@ def decide(cfg, *, day, price, baseline, lowest, target, target_buffer, states, 
                 or price <= s["price_inr"] - realert_step(cfg, s["price_inr"]))
 
     out = []
-    if len(baseline) >= d["min_samples"]:
-        g = grade(cfg, price, baseline)
-        if g and again("deal", g["level"]):
-            out.append({"rule": "deal", "saving": round(g["median"] - price), **g})
-        if lowest is not None and price < lowest and again("new_low", None):
-            out.append({"rule": "new_low", "level": None, "saving": lowest - price})
+    if samples >= d["min_samples"] and lowest is not None and price < lowest and again("new_low", None):
+        out.append({"rule": "new_low", "level": None, "saving": lowest - price})
     if target:
         buf = d["target_buffer_inr"] if target_buffer is None else target_buffer
         level = "hit" if price <= target else "near" if price <= target + buf else None
@@ -204,15 +173,12 @@ def lowest_text(h, tz):
     return f"lowest we've recorded since {since:%d %b} {inr(h['lowest'])}"
 
 
-def line(cfg, h, tz):
+def line(h, tz):
     day, p, lv = day_label(h["day"]), h["price"], h.get("level")
     if h["rule"] == "target":
         t = h["target"]
         text = f"🎯 TARGET {day} · {inr(p)}, " + (f"at/below your target {inr(t)}" if lv == "hit"
                                                   else f"within {inr(p - t)} of your target {inr(t)}")
-    elif h["rule"] == "deal":
-        text = (f"🟢 {lv.upper()} DEAL {day} · {inr(p)}, below the {h['pct']:g}th percentile {inr(h['cut'])} "
-                f"of {h['n']} prices in {cfg['deal']['baseline_days']} days (median {inr(h['median'])})")
     elif h["rule"] == "new_low":
         text = f"📉 NEW LOW {day} · {inr(p)}, previous {lowest_text(h, tz)}"
     else:
@@ -227,12 +193,10 @@ def message(cfg, r, hits):
     """One Telegram message (HTML) for every rule that fired in one scan; hits sorted by priority()."""
     tz = ZoneInfo(cfg["schedule"]["timezone"])
     head = hits[0]
-    lines = [f"✈️ {route_name(r)}"] + [line(cfg, h, tz) for h in hits]
+    lines = [f"✈️ {route_name(r)}"] + [line(h, tz) for h in hits]
     bits = []
     if o := head.get("obs"):
         bits.append(flight_text(o))
-        if o["bags"] is not None:
-            bits.append(f"{o['bags']} checked bag{'s' * (o['bags'] != 1)}")
     bits += [gf_link(r, head["day"]), "indicative, confirm on booking page"]
     lines.append(" · ".join(bits))
     return for_owner(r, "\n".join(lines))

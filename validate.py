@@ -19,7 +19,7 @@ CARRIERS = {"6E", "AI", "IX", "QP", "SG"}
 
 def call(cfg, dest, day):
     try:
-        raw, attempts = providers.post(cfg, providers.body(cfg, "HYD", dest, day, cfg["search"]["max_stops"], None))
+        raw, attempts = providers.post(cfg, providers.body(cfg, "HYD", dest, day, cfg["search"]["max_stops"]))
     except providers.ProviderError as e:
         budget.record(cfg, datetime.now(UTC), "validate", e.attempts)
         sys.exit(f"HYD→{dest}: {e.message}")

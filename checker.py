@@ -76,7 +76,11 @@ def run_due(cfg, now=None):
         if not slot or (r["last_anchor_at"] and parse(r["last_anchor_at"]) >= slot):
             continue
         db.update_route(r["id"], last_anchor_at=iso(slot))  # a failed slot is not retried
-        msgs += scan(cfg, r, "anchor", now, iso(slot))
+        try:
+            msgs += scan(cfg, r, "anchor", now)
+        except Exception as e:  # a bug or bad data in one route must not stop the others
+            log.exception("check of route %s failed", r["id"])
+            msgs.append(f"⚠️ {alerts.route_name(r)}: check crashed ({html.escape(repr(e))}). See the logs.")
     return msgs
 
 
@@ -84,7 +88,7 @@ def expired(r, loc):
     if loc.date() > date.fromisoformat(r["anchor_date"]):
         return "date passed"
     if r["flight_no"]:
-        o = db.one(f"SELECT dep_local FROM observations WHERE route_id=? AND depart_date=? AND flight_no=? "
+        o = db.one("SELECT dep_local FROM observations WHERE route_id=? AND depart_date=? AND flight_no=? "
                    "AND price_inr IS NOT NULL ORDER BY id DESC LIMIT 1", (r["id"], r["anchor_date"], r["flight_no"]))
         # dep_local is airport-local time; fine for domestic India (one timezone)
         if o and datetime.fromisoformat(o["dep_local"][:16]) <= loc.replace(tzinfo=None):
@@ -95,11 +99,13 @@ def expired(r, loc):
 # ---------------------------------------------------------------- one query
 
 def fetch(cfg, r, day, kind, now):
-    """One provider query → (observation row, messages). Spend is recorded per attempt."""
+    """One provider query → (observation row, messages). Spend is recorded per attempt, even if
+    handling the response then crashes."""
     stops = r["max_stops"] if r["max_stops"] is not None else cfg["search"]["max_stops"]
     obs = {"route_id": r["id"], "depart_date": day, "kind": kind, "observed_at": iso(now), "provider": "ignav"}
+    attempts = 0
     try:
-        offers, cache_hit, attempts = search(cfg, r["origin"], r["destination"], day, stops, r["min_bags"])
+        offers, cache_hit, attempts = search(cfg, r["origin"], r["destination"], day, stops)
         best = providers.cheapest(offers, r, stops)
         obs.update(ok=1, cache_hit=int(cache_hit), **(best or {"error": "no flight matches the filters"}))
     except providers.ProviderError as e:
@@ -107,9 +113,11 @@ def fetch(cfg, r, day, kind, now):
         obs.update(ok=0, error=e.message)
         if e.status == 429:
             budget.pause(cfg, now)
+    finally:
+        msgs = budget.record(cfg, now, kind, attempts)
     log.info("ignav %s %s→%s %s ok=%s price=%s err=%s", kind, r["origin"], r["destination"], day,
              obs["ok"], obs.get("price_inr"), obs.get("error"))
-    return obs, budget.record(cfg, now, kind, attempts)
+    return obs, msgs
 
 
 def on_failure(cfg, r, obs, now):
@@ -137,12 +145,10 @@ def valid(cfg, obs, now):
     return int(dep - now > timedelta(hours=cfg["deal"]["min_lead_h"]))
 
 
-def context(cfg, r, now):
+def context(r):
     """What the rules compare a new price of D against, read before that price is saved."""
-    rid, day = r["id"], r["anchor_date"]
-    lowest, first_seen = db.lowest_seen(rid, day)
-    return {"day": day, "lowest": lowest, "first_seen": first_seen,
-            "baseline": db.baseline_prices(rid, day, now - timedelta(days=cfg["deal"]["baseline_days"]))}
+    lowest, first_seen, samples = db.lowest_seen(r["id"], r["anchor_date"])
+    return {"day": r["anchor_date"], "lowest": lowest, "first_seen": first_seen, "samples": samples}
 
 
 def decide(cfg, r, price, ctx):
@@ -181,7 +187,7 @@ def evaluate(cfg, r, obs, ctx, now):
 def book_by_hit(cfg, r, now):
     d = r["anchor_date"]
     cur = db.current_price(r["id"], d, now - timedelta(hours=cfg["deal"]["freshness_h"]))
-    lowest, first_seen = db.lowest_seen(r["id"], d)
+    lowest, first_seen, _ = db.lowest_seen(r["id"], d)
     return {"rule": "book_by", "level": None, "saving": None, "day": d, "obs": cur,
             "price": cur["price_inr"] if cur else None, "observation_id": cur["id"] if cur else None,
             "lowest": lowest, "first_seen": first_seen,
@@ -205,16 +211,15 @@ def deliver(cfg, r, hits, now):
     return m
 
 
-def scan(cfg, r, kind, now, slot=None):
-    """Fetch D, then evaluate every rule together → at most one alert message.
-    `slot` (iso) marks scheduled fetches as baseline samples."""
+def scan(cfg, r, kind, now):
+    """Fetch D, then evaluate every rule together → at most one alert message."""
     msgs, hits = [], []
     if why := budget.blocked(cfg, now):
         msgs += once(f"blocked:{budget.month_key(cfg, now)}:{why}", f"⛔ Ignav checks stopped: {why}.")
     else:
         obs, msgs = fetch(cfg, r, r["anchor_date"], kind, now)
-        obs |= {"baseline_slot": slot, "valid": valid(cfg, obs, now)}
-        ctx = context(cfg, r, now) if obs["valid"] else None
+        obs["valid"] = valid(cfg, obs, now)
+        ctx = context(r) if obs["valid"] else None
         obs["id"] = db.add_observation(obs)
         if not obs["ok"]:
             msgs += on_failure(cfg, r, obs, now)

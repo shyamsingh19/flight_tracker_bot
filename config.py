@@ -49,9 +49,6 @@ SCHEMA = {
         "min_interval_min": (15, int, 1, 1440),
     },
     "deal": {
-        "baseline_days": (30, int, 1, 365),
-        "good_percentile": (25, float, 0, 100),
-        "great_percentile": (10, float, 0, 100),
         "min_samples": (20, int, 1, 100000),
         "freshness_h": (26, float, 1, 720),
         "min_lead_h": (3, float, 0, 72),
@@ -84,6 +81,7 @@ SCHEMA = {
         "daily_summary_at": ("08:30", hhmm),
         "heartbeat_every_min": (30, int, 1, 1440),
         "backup_at": ("02:00", hhmm),
+        "backup_keep": (14, int, 1, 365),
         "log_level": ("INFO", ("DEBUG", "INFO", "WARNING", "ERROR")),
         "admin_notices": (True, bool),
     },
@@ -139,14 +137,7 @@ def load(path="config.toml"):
                 cfg[sec][key] = _coerce(raw, kind, rng)
             except (ValueError, TypeError) as e:
                 raise ConfigError(f"[{sec}] {key} = {raw!r}: {e}") from None
-    _cross_check(cfg)
     return cfg
-
-
-def _cross_check(cfg):
-    d = cfg["deal"]
-    if d["great_percentile"] > d["good_percentile"]:
-        raise ConfigError("[deal] great_percentile must be <= good_percentile")
 
 
 def load_env(path=".env"):

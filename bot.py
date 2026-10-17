@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import re
-import tempfile
 import warnings
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
@@ -44,17 +43,14 @@ HELP = """✈️ <b>Flight price alert</b>
   <code>stops=0</code> — max stops
   <code>airline=6E</code> · <code>flight=6E2134</code>
   <code>time=06-12</code> — departure window (hours)
-  <code>bags=1</code> — checked bags
   <code>every=120</code> — check every 120 min
   <code>force</code> — allow over the cost cap
 
 📋 <b>Your routes</b>
-/list — your tracked routes (tap one for its buttons)
-/history — price history
-/calls — every search made, with result
-/checknow — check right now
+/list — your tracked routes; tap one to pause, resume or delete it
+/history — every check of a route, with its result
+/checknow — check a route right now
 /settarget [<code>4500</code> [buffer] · <code>off</code>]
-/pause · /resume · /delete
 <i>These ask which route with a button each.</i>
 <i>Each route watches one date. For another day, track it too.</i>
 
@@ -177,7 +173,7 @@ def parse_track(cfg, args, today):
         raise ValueError("that date has passed")
     opts = dict(a.split("=", 1) for a in args[3:] if "=" in a)
     flags = {a.lower() for a in args[3:] if "=" not in a}
-    if bad := (set(opts) - {"target", "stops", "airline", "flight", "time", "bags", "every"}) | (flags - {"force"}):
+    if bad := (set(opts) - {"target", "stops", "airline", "flight", "time", "every"}) | (flags - {"force"}):
         raise ValueError(f"unknown option(s): {', '.join(sorted(bad))}")
     stops = int(opts["stops"]) if "stops" in opts else None
     if stops is not None and not 0 <= stops <= 2:
@@ -195,7 +191,6 @@ def parse_track(cfg, args, today):
         "airline": opts.get("airline", "").upper() or None,
         "flight_no": opts.get("flight", "").replace(" ", "").upper() or None,
         "max_stops": stops, "time_start": t0, "time_end": t1,
-        "min_bags": int(opts["bags"]) if "bags" in opts else None,
         "target_inr": int(opts["target"]) if "target" in opts else None,
         "anchor_every_min": every, "status": "active",
     }, "force" in flags
@@ -228,25 +223,6 @@ def save_route(cfg, route, force, now):
 async def cmd_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text, kb = alerts_view(update.effective_user.id, now_utc())
     await say_kb(update, text, kb)
-
-
-async def set_status(update, ctx, cmd, status):
-    if not (r := await pick(update, ctx, cmd)):
-        return
-    db.update_route(r["id"], status=status)
-    await say(update, f"{route_name(r)} → {status}. {projection_text(cfg_of(ctx), now_utc())}")
-
-
-async def cmd_delete(update, ctx):
-    await set_status(update, ctx, "delete", "deleted")
-
-
-async def cmd_pause(update, ctx):
-    await set_status(update, ctx, "pause", "paused")
-
-
-async def cmd_resume(update, ctx):
-    await set_status(update, ctx, "resume", "active")
 
 
 TARGET = 3  # conversation state: waiting for the target price
@@ -292,21 +268,11 @@ def set_target(r, text):
             + (f", alerts at or below {inr(target + buf)}" if buf is not None else " (default buffer)"))
 
 
-async def cmd_history(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not (r := await pick(update, ctx, "history")):
-        return
-    cfg = cfg_of(ctx)
-    tz = ZoneInfo(cfg["schedule"]["timezone"])
-    rows = db.q(f"SELECT * FROM observations WHERE route_id=? AND depart_date=? AND {checker.PRICED} "
-                "ORDER BY observed_at DESC LIMIT ?", (r["id"], r["anchor_date"], cfg["ui"]["history_default_n"]))
-    lines = [f"📈 {route_name(r)}"]
-    lines += [f"{parse(o['observed_at']).astimezone(tz):%d %b %H:%M} {inr(o['price_inr'])} {o['flight_no']}"
-              for o in reversed(rows)]
-    await say(update, "\n".join(lines))
+KIND = {"anchor": "auto", "manual": "manual", "recheck": "re-check"}
 
 
-def calls_text(cfg, r):
-    """Last history_default_n searches for a route: time, kind, date, result, and which ones alerted."""
+def history_text(cfg, r):
+    """/history: the last history_default_n checks of a route: time, kind, result, and which ones alerted."""
     tz = ZoneInfo(cfg["schedule"]["timezone"])
     rows = db.q("SELECT o.*, GROUP_CONCAT(a.rule) AS fired FROM observations o "
                 "LEFT JOIN alerts a ON a.observation_id=o.id WHERE o.route_id=? "
@@ -316,18 +282,18 @@ def calls_text(cfg, r):
     for o in reversed(rows):
         res = (f"{inr(o['price_inr'])} {o['flight_no']}" + (" (cached)" if o["cache_hit"] else "")
                if o["price_inr"] is not None else ("❌ " if not o["ok"] else "") + html.escape(o["error"] or "—"))
-        lines.append(f"{parse(o['observed_at']).astimezone(tz):%d %b %H:%M} {o['kind']} {day_label(o['depart_date'])}: "
+        lines.append(f"{parse(o['observed_at']).astimezone(tz):%d %b %H:%M} {KIND.get(o['kind'], o['kind'])}: "
                      f"{res}" + (f" 🔔 {o['fired']}" if o["fired"] else ""))
-    head = f"📜 {route_name(r)} — last {len(rows)} searches"
+    head = f"📜 {route_name(r)} — last {len(rows)} checks"
     while lines and len(head) + sum(len(x) + 1 for x in lines) > MessageLimit.MAX_TEXT_LENGTH:
         lines.pop(0)  # keep the newest that fit in one message
-    return "\n".join([head] + lines) if lines else f"📜 {route_name(r)}: no searches yet."
+    return "\n".join([head] + lines) if lines else f"📜 {route_name(r)}: no checks yet."
 
 
-async def cmd_calls(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not (r := await pick(update, ctx, "calls")):
+async def cmd_history(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not (r := await pick(update, ctx, "history")):
         return
-    await say(update, calls_text(cfg_of(ctx), r))
+    await say(update, history_text(cfg_of(ctx), r))
 
 
 async def cmd_checknow(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -570,7 +536,7 @@ def run_search(cfg, o, d, day, now):
     if why := budget.blocked(cfg, now):
         raise providers.ProviderError(why, attempts=0)
     try:
-        offers, _, attempts = checker.search(cfg, o, d, day, cfg["search"]["max_stops"], None)
+        offers, _, attempts = checker.search(cfg, o, d, day, cfg["search"]["max_stops"])
     except providers.ProviderError as e:
         budget.record(cfg, now, "search", e.attempts)
         raise
@@ -589,8 +555,7 @@ def results_view(cfg, s, uid):
             stops = "Direct" if o["stops"] == 0 else f"{o['stops']} stop{'s' * (o['stops'] > 1)}"
             arr = f" → {o['arr_local'][11:16]}" + (" +1" if o["arr_local"][:10] > o["dep_local"][:10] else "") \
                 if o.get("arr_local") else ""
-            bags = f" · {o['bags']} bag" if o["bags"] else ""
-            lines.append(f"\n{i}. ✈️ {o['flight_no']} · {stops}\n    🕐 {o['dep_local'][11:16]}{arr} · <b>{inr(o['price_inr'])}</b>{bags}")
+            lines.append(f"\n{i}. ✈️ {o['flight_no']} · {stops}\n    🕐 {o['dep_local'][11:16]}{arr} · <b>{inr(o['price_inr'])}</b>")
     lines.append("\n" + alerts.gf_link({"origin": s["o"], "destination": s["d"]}, s["day"]))
     t = tracked(s, uid)
     rows = [[Btn("✅ Tracking (see My Alerts)", callback_data="menu:alerts") if t
@@ -646,9 +611,9 @@ def route_view(r, now):
     paused = r["status"] == "paused"
     return route_card(r, now), Kb([
         [Btn("🔄 Check now", callback_data=f"p:checknow:{i}:"), Btn("🎯 Target", callback_data=f"t:{i}")],
-        [Btn("📈 Price history", callback_data=f"p:history:{i}:"), Btn("📜 Searches", callback_data=f"p:calls:{i}:")],
-        [Btn("▶️ Resume" if paused else "⏸ Pause", callback_data=f"r:{'active' if paused else 'paused'}:{i}"),
-         Btn("❌ Delete", callback_data=f"r:deleted:{i}")],
+        [Btn("📜 History", callback_data=f"p:history:{i}:"),
+         Btn("▶️ Resume" if paused else "⏸ Pause", callback_data=f"r:{'active' if paused else 'paused'}:{i}")],
+        [Btn("❌ Delete", callback_data=f"r:deleted:{i}")],
         [Btn("« My Alerts", callback_data="menu:alerts")]])
 
 
@@ -737,12 +702,24 @@ async def summary(ctx: ContextTypes.DEFAULT_TYPE):
                f"free calls left {budget.free_left(cfg)}")
 
 
+def save_backup(keep, today):
+    """Copy the live database to backups/<db name>-YYYY-MM-DD.db and delete all but the newest `keep`
+    of those. Hand-made copies with other names in backups/ are left alone."""
+    live = Path(db.PATH)
+    folder = live.parent / "backups"
+    folder.mkdir(exist_ok=True)
+    dest = folder / f"{live.stem}-{today:%Y-%m-%d}.db"
+    db.backup(dest)
+    for old in sorted(folder.glob(f"{live.stem}-????-??-??.db"))[:-keep]:
+        old.unlink()
+    return dest
+
+
 async def backup(ctx: ContextTypes.DEFAULT_TYPE):
-    if not cfg_of(ctx)["monitoring"]["admin_notices"]:
-        return
-    with tempfile.TemporaryDirectory() as d:
-        dest = Path(d) / f"flightbot-{date.today():%Y-%m-%d}.db"
-        await asyncio.to_thread(db.backup, dest)
+    """Always kept on disk; also sent to the admin (off-machine copy) when admin_notices is on."""
+    cfg = cfg_of(ctx)
+    dest = await asyncio.to_thread(save_backup, cfg["monitoring"]["backup_keep"], checker.local(cfg, now_utc()).date())
+    if cfg["monitoring"]["admin_notices"]:
         with open(dest, "rb") as f:
             await ctx.bot.send_document(int(os.environ["ALLOWED_USER_ID"]), f, caption="Nightly backup")
 
@@ -764,13 +741,18 @@ def schedule_jobs(app):
 
 async def on_error(update, ctx: ContextTypes.DEFAULT_TYPE):
     log.error("unhandled error", exc_info=ctx.error)
+    if isinstance(update, Update) and update.effective_message:  # tell the user instead of going silent
+        try:
+            await update.effective_message.reply_text("⚠️ Something went wrong. Please try again.")
+        except TelegramError:
+            pass
 
 
 async def post_init(app):
     await app.bot.set_my_commands([BotCommand("start", "Menu"), BotCommand("search", "Guided flight search"),
                                    BotCommand("list", "My price alerts"),
                                    BotCommand("settarget", "Set a target price (+ buffer)"),
-                                   BotCommand("history", "Price history of a route"),
+                                   BotCommand("history", "Every check of a route"),
                                    BotCommand("checknow", "Check a route right now"),
                                    BotCommand("status", "Health and spend"),
                                    BotCommand("help", "All commands")])
@@ -788,15 +770,12 @@ def main():
     logging.getLogger("httpx").setLevel(logging.WARNING)
     db.init()
     db.run("UPDATE routes SET owner_id=? WHERE owner_id IS NULL", (int(os.environ["ALLOWED_USER_ID"]),))
-    if not db.kv_get("baseline_backfilled"):  # one-time after the upgrade to baseline slots
-        db.backfill_baseline_slots(["anchor"], cfg["schedule"]["anchor_every_min"])
-        db.kv_set("baseline_backfilled", "1")
     build_app(cfg, os.environ["TELEGRAM_TOKEN"]).run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 # Commands that take a route: typed bare they show pick(); its buttons (p:<cmd>:<id>:…) come back to pick_button.
-PICKABLE = {"history": cmd_history, "calls": cmd_calls, "checknow": cmd_checknow,
-            "pause": cmd_pause, "resume": cmd_resume, "delete": cmd_delete}
+# Pause / resume / delete are buttons on each route (route_view), not commands.
+PICKABLE = {"history": cmd_history, "checknow": cmd_checknow}
 
 
 def build_app(cfg, token):

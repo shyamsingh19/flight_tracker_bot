@@ -3,6 +3,7 @@ import json
 import os
 import random
 import time
+from datetime import date, datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -17,14 +18,11 @@ class ProviderError(Exception):
         self.message, self.status, self.attempts = message, status, attempts
 
 
-def body(cfg, origin, dest, day, max_stops, min_bags):
+def body(cfg, origin, dest, day, max_stops):
     s = cfg["search"]
-    b = {"origin": origin, "destination": dest, "departure_date": day, "adults": s["adults"],
-         "cabin_class": s["cabin_class"], "max_stops": max_stops,
-         "allow_self_transfer": s["allow_self_transfer"], "market": s["market"]}
-    if min_bags:
-        b["min_checked_bags"] = min_bags
-    return b
+    return {"origin": origin, "destination": dest, "departure_date": day, "adults": s["adults"],
+            "cabin_class": s["cabin_class"], "max_stops": max_stops,
+            "allow_self_transfer": s["allow_self_transfer"], "market": s["market"]}
 
 
 def post(cfg, payload):
@@ -79,12 +77,12 @@ def parse(data, cfg):
     return offers, bool(data.get("cache_hit"))
 
 
-def ignav_search(cfg, origin, dest, day, max_stops, min_bags):
+def ignav_search(cfg, origin, dest, day, max_stops):
     """→ (offers, cache_hit, attempts). Raises ProviderError."""
     if os.environ.get("DRY_RUN") == "1":
-        data, attempts = _fixture(origin, dest), 1
+        data, attempts = _fixture(origin, dest, day), 1
     else:
-        data, attempts = post(cfg, body(cfg, origin, dest, day, max_stops, min_bags))
+        data, attempts = post(cfg, body(cfg, origin, dest, day, max_stops))
     try:
         offers, cache_hit = parse(data, cfg)
     except (KeyError, TypeError, ValueError, IndexError) as e:
@@ -92,24 +90,28 @@ def ignav_search(cfg, origin, dest, day, max_stops, min_bags):
     return offers, cache_hit, attempts
 
 
-def _fixture(origin, dest):
-    """DRY_RUN: a recorded response (fixtures/<O>_<D>.json, else sample) with prices jittered ±10%."""
+def _fixture(origin, dest, day):
+    """DRY_RUN: a recorded response (fixtures/<O>_<D>.json, else sample) with prices jittered ±10%, moved
+    to `day` (a recorded date that has passed would make every price invalid)."""
     f = FIXTURES / f"{origin}_{dest}.json"
     data = json.loads((f if f.exists() else FIXTURES / "sample_oneway.json").read_text())
+    shift = None
     for it in data["itineraries"]:
         it["price"]["amount"] *= random.uniform(0.9, 1.1)
+        for seg in it["outbound"]["segments"]:
+            for k in ("departure_time_local", "arrival_time_local"):
+                t = datetime.fromisoformat(seg[k])
+                shift = date.fromisoformat(day) - t.date() if shift is None else shift
+                seg[k] = (t + shift).isoformat()
     return data
 
 
 def cheapest(offers, route, max_stops):
-    """Cheapest offer passing the route's airline / flight / stops / time-of-day / bags filters."""
+    """Cheapest offer passing the route's airline / flight / stops / time-of-day filters."""
     def ok(o):
         m = int(o["dep_local"][11:13]) * 60 + int(o["dep_local"][14:16])
         return ((not route["airline"] or o["airline"] == route["airline"])
                 and (not route["flight_no"] or o["flight_no"] == route["flight_no"])
                 and o["stops"] <= max_stops
-                and (route["time_start"] is None or route["time_start"] * 60 <= m <= route["time_end"] * 60)
-                # unknown allowance passes: Ignav already filtered server-side (min_checked_bags), and
-                # 6E/QP return bags=None
-                and (not route["min_bags"] or o["bags"] is None or o["bags"] >= route["min_bags"]))
+                and (route["time_start"] is None or route["time_start"] * 60 <= m <= route["time_end"] * 60))
     return min(filter(ok, offers), key=lambda o: o["price_inr"], default=None)
