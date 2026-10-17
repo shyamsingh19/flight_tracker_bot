@@ -84,7 +84,7 @@ def run_due(cfg, now=None):
     for r in db.q("SELECT * FROM routes WHERE status='active'"):
         if done := expired(r, loc):
             db.update_route(r["id"], status="expired")
-            msgs.append(alerts.for_owner(r, f"✅ #{r['id']} {r['origin']}→{r['destination']} {alerts.day_label(r['anchor_date'])} "
+            msgs.append(alerts.for_owner(r, f"✅ {alerts.route_name(r)} "
                         f"expired ({done}). Tracking stopped."))
             continue
         if not in_active(cfg, loc):
@@ -181,7 +181,7 @@ def on_failure(cfg, r, obs, now):
     if ((n >= m["fail_notify_after"] or now - first >= timedelta(minutes=m["fail_notify_after_min"]))
             and (not last or now - parse(last) >= timedelta(minutes=m["fail_notify_cooldown_min"]))):
         db.update_route(r["id"], last_fail_notify_at=iso(now))
-        return [f"⚠️ #{r['id']} {r['origin']}→{r['destination']}: {n} failed checks in a row since "
+        return [f"⚠️ {alerts.route_name(r)}: {n} failed checks in a row since "
                 f"{local(cfg, first):%H:%M}. Last error: {html.escape(obs['error'])}. Retrying at the next slot."]
     return []
 

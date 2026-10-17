@@ -486,11 +486,11 @@ class TestGuidedFlow(Base):
         text, kb = bot.results_view(self.cfg, s, 1)
         self.assertNotIn("6E668", text)
         route, _ = bot.parse_track(self.cfg, ["HYD", "DEL", "2026-11-06", "stops=0"], date(2026, 10, 13))
-        self.assertIn("✅ Tracking #1", bot.save_route(self.cfg, route | {"owner_id": 1}, False, at("2026-10-13", 15)))
+        self.assertIn("✅ Tracking HYD → DEL · Fri 06 Nov · direct", bot.save_route(self.cfg, route | {"owner_id": 1}, False, at("2026-10-13", 15)))
         self.assertEqual(bot.results_view(self.cfg, s, 2)[1].inline_keyboard[0][0].callback_data, "s:trk")  # not theirs
         _, kb = bot.results_view(self.cfg, s, 1)
         self.assertEqual((kb.inline_keyboard[0][0].text, kb.inline_keyboard[0][0].callback_data),
-                         ("✅ Tracking #1", "menu:alerts"))
+                         ("✅ Tracking (see My Alerts)", "menu:alerts"))
         s["direct"] = False  # all-flights watch of the same date is a different route
         self.assertEqual(bot.results_view(self.cfg, s, 1)[1].inline_keyboard[0][0].callback_data, "s:trk")
 
@@ -498,14 +498,35 @@ class TestGuidedFlow(Base):
         self.route()
         self.route(owner_id=2)
         text, kb = bot.alerts_view(self.cfg, 1, at("2026-12-01", 9))
-        self.assertIn("#1 HYD → DEL", text)
-        self.assertNotIn("#2", text)  # user 2's route
-        self.assertIn("#2 HYD → DEL", bot.alerts_view(self.cfg, 2, at("2026-12-01", 9))[0])
+        self.assertIn("HYD → DEL", text)
+        self.assertNotIn("#", text)  # no database ids shown
+        self.assertEqual([[b.callback_data for b in row] for row in kb.inline_keyboard], [["v:1"]])  # not user 2's
+        self.assertEqual(bot.alerts_view(self.cfg, 2, at("2026-12-01", 9))[1].inline_keyboard[0][0].callback_data, "v:2")
         u1 = SimpleNamespace(effective_user=SimpleNamespace(id=1))
         self.assertIsNotNone(bot.own_route(u1, 1))
         self.assertIsNone(bot.own_route(u1, 2))
         self.assertIn("← your date", text)
-        self.assertEqual([b.callback_data for b in kb.inline_keyboard[0]], ["r:deleted:1", "t:1", "r:paused:1"])
+        _, kb = bot.route_view(self.cfg, db.route(1), at("2026-12-01", 9))
+        self.assertEqual([b.callback_data for b in kb.inline_keyboard[0]], ["p:checknow:1:", "t:1"])
+        self.assertEqual(bot.pick_args("p:checknow:1:all yes"), ["1", "all", "yes"])
+        self.assertEqual(bot.pick_args("t:1"), ["1"])
+        self.assertEqual(bot.pick_args("menu:target"), [])
+
+    def test_pick_shows_routes_not_ids(self):
+        self.route()
+        sent = []
+
+        async def reply(text, reply_markup=None):
+            sent.append((text, reply_markup))
+
+        upd = SimpleNamespace(effective_user=SimpleNamespace(id=1), effective_message=SimpleNamespace(reply_text=reply))
+        ctx = SimpleNamespace(args=["8000"])
+        self.assertIsNone(asyncio.run(bot.pick(upd, ctx, "settarget")))
+        btn = sent[0][1].inline_keyboard[0][0]
+        self.assertNotIn("#", btn.text)
+        self.assertEqual(btn.callback_data, "p:settarget:1:8000")  # the typed price rides along
+        ctx.args = bot.pick_args(btn.callback_data)
+        self.assertEqual(asyncio.run(bot.pick(upd, ctx, "settarget"))["id"], 1)
 
     def test_gate(self):
         os.environ |= {"ALLOWED_USER_ID": "1", "ALERT_USER_IDS": "2"}

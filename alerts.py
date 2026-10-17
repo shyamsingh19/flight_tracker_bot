@@ -30,7 +30,7 @@ RULES  (D = your date; alt = any other tracked date in D±flex)
                    The strict "below" plus the median gap means a flat price is never a deal.
   📉 NEW LOW       D only, after min_samples. Current price is strictly below lowest seen.
                    (Replaces DROP: no false alarm when a spike recovers to a normal price.)
-  🎯 TARGET        Any tracked date with a target (/settarget id price [buffer]; buffer defaults
+  🎯 TARGET        Any tracked date with a target (/settarget price [buffer]; buffer defaults
                    to target_buffer_inr).
                    HIT:  price ≤ target.     Message: "at/below your target".
                    NEAR: price ≤ target + buffer.   Message: "within ₹X of your target".
@@ -189,6 +189,12 @@ def day_label(day):
     return date.fromisoformat(day).strftime("%a %d %b")
 
 
+def route_name(r):
+    """What users see instead of the database id: 'HYD → DEL · Sun 20 Dec' (+ flight / direct if set)."""
+    extra = f" · {r['flight_no']}" if r["flight_no"] else " · direct" if r["max_stops"] == 0 else ""
+    return f"{r['origin']} → {r['destination']} · {day_label(r['anchor_date'])}{extra}"
+
+
 def gf_link(r, day):
     return (f'<a href="https://www.google.com/travel/flights?q=Flights%20from%20{r["origin"]}%20to%20'
             f'{r["destination"]}%20on%20{day}%20oneway&curr=INR&hl=en-IN">Google Flights</a>')
@@ -242,7 +248,7 @@ def message(cfg, r, hits):
     """One Telegram message (HTML) for every rule that fired in one scan; hits sorted by priority()."""
     tz = ZoneInfo(cfg["schedule"]["timezone"])
     head = hits[0]
-    lines = [f"✈️ #{r['id']} {r['origin']}→{r['destination']}"] + [line(cfg, r, h, tz) for h in hits]
+    lines = [f"✈️ {route_name(r)}"] + [line(cfg, r, h, tz) for h in hits]
     bits = []
     if o := head.get("obs"):
         bits.append(flight_text(o))

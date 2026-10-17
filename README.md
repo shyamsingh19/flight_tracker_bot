@@ -36,7 +36,7 @@ To try it without spending calls, run `DRY_RUN=1 DB_PATH=dry.db .venv/bin/python
 - Everything after the date is optional.
 - `/track` refuses a route that would push projected spend past the hard stop, unless you add `force`.
 
-Other commands: `/list`, `/history id`, `/calls id` (or 📜 in My Alerts: every search with time, kind and result), `/status`, `/checknow id [all]` (or 🔄 in My Alerts; limited to `checknow_per_user_day` calls per user per day), `/settarget [id] [4500 [buffer]|off]` (or 🎯 in My Alerts), `/pause id`, `/resume id`, `/delete id`, `/reload`.
+Other commands: `/list`, `/history`, `/calls` (every search with time, kind and result), `/status`, `/checknow [all]` (limited to `checknow_per_user_day` calls per user per day), `/settarget [4500 [buffer]|off]`, `/pause`, `/resume`, `/delete`, `/reload`. Commands that act on a route never need an id: they reply with one button per tracked route (e.g. "HYD → DEL · Sun 20 Dec"). The same actions are buttons on each route in 🔔 My Alerts.
 
 To change a number, edit `config.toml` and send `/reload`. The bot replies with the new projected monthly cost and the keys that changed. If the file is invalid, it names the bad key and keeps the old config. `/reload` also re-reads `.env`, so a fixed `IGNAV_API_KEY` takes effect without a restart.
 
