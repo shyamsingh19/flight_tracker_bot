@@ -45,12 +45,12 @@ def pause(cfg, now):
     db.kv_set("ignav_paused_until", db.iso(now + timedelta(minutes=cfg["provider"]["backoff_on_429_min"])))
 
 
-def record(cfg, now, kind, attempts):
-    """Log `attempts` calls; return any budget warnings newly crossed this month."""
+def record(cfg, now, kind, attempts, user_id=None):
+    """Log `attempts` calls made for `user_id`; return any budget warnings newly crossed this month."""
     month = month_key(cfg, now)
     for _ in range(attempts):
         db.insert("spend", {"ts": db.iso(now), "month": month, "provider": "ignav", "kind": kind,
-                            "est_inr": next_call_inr(cfg)})
+                            "est_inr": next_call_inr(cfg), "user_id": user_id})
     cap = cfg["budget"]["monthly_cap_inr"]
     spent = month_spend(cfg, now)
     msgs = []

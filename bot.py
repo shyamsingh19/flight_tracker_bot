@@ -524,7 +524,8 @@ async def search_day(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     s.update(day=day.isoformat(), direct=False)
     await say(update, "Ok, give me a few seconds 🔍")
     try:
-        s["offers"] = await asyncio.to_thread(run_search, cfg, s["o"], s["d"], s["day"], now)
+        s["offers"] = await asyncio.to_thread(run_search, cfg, s["o"], s["d"], s["day"], now,
+                                              update.effective_user.id)
     except providers.ProviderError as e:
         log.warning("search %s→%s %s failed: %s", s["o"], s["d"], s["day"], e.message)
         await say(update, "⚠️ I couldn't search right now. Please try again later.")
@@ -539,16 +540,16 @@ async def search_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-def run_search(cfg, o, d, day, now):
-    """One Ignav call for the menu search; counted in the spend ledger like any other."""
+def run_search(cfg, o, d, day, now, uid):
+    """One Ignav call for the menu search by user `uid`; counted in the spend ledger like any other."""
     if why := budget.blocked(cfg, now):
         raise providers.ProviderError(why, attempts=0)
     try:
         offers, _, attempts = checker.search(cfg, o, d, day, cfg["search"]["max_stops"])
     except providers.ProviderError as e:
-        budget.record(cfg, now, "search", e.attempts)
+        budget.record(cfg, now, "search", e.attempts, uid)
         raise
-    budget.record(cfg, now, "search", attempts)
+    budget.record(cfg, now, "search", attempts, uid)
     return sorted(offers, key=lambda x: x["price_inr"])
 
 
@@ -703,12 +704,76 @@ async def heartbeat(ctx: ContextTypes.DEFAULT_TYPE):
         log.warning("heartbeat failed: %s", e)
 
 
+def report_text(cfg, title, start, end, names):
+    """Admin report for [start, end): how many users, what each one used, and the money.
+    `names` = {user id: display name}; unknown ids are shown as the number."""
+    s, e = iso(start), iso(end)
+    admin = int(os.environ["ALLOWED_USER_ID"])
+    by = lambda sql: {r[0]: r for r in db.q(sql, (s, e))}  # noqa: E731
+    calls = by("SELECT user_id, COUNT(*) n, COALESCE(SUM(est_inr), 0) inr, SUM(kind='manual') manual,"
+               " SUM(kind='search') searches FROM spend WHERE ts>=? AND ts<? GROUP BY user_id")
+    alerted = by("SELECT r.owner_id, COUNT(*) n FROM alerts a JOIN routes r ON r.id=a.route_id"
+                 " WHERE a.headline=1 AND a.sent_at>=? AND a.sent_at<? GROUP BY r.owner_id")
+    new = by("SELECT owner_id, COUNT(*) n FROM routes WHERE created_at>=? AND created_at<? GROUP BY owner_id")
+    routes = {r[0]: r["n"] for r in db.q("SELECT owner_id, COUNT(*) n FROM routes WHERE status='active' GROUP BY owner_id")}
+    total = db.one("SELECT COUNT(*) n, COALESCE(SUM(est_inr), 0) inr FROM spend WHERE ts>=? AND ts<?", (s, e))
+    failed = db.one("SELECT COUNT(*) n FROM observations WHERE ok=0 AND observed_at>=? AND observed_at<?", (s, e))["n"]
+    users = [admin] + [u for u in alert_ids() if u != admin]
+    users += [u for u in calls if u not in users]  # removed users, and calls from before user ids were kept (None)
+    used = [u for u in users if u in calls or u in new]
+    lines = [f"<b>{title}</b>",
+             f"👥 Users: {len(users) - (None in users)} with access, {len(used) - (None in used)} used the bot",
+             f"💰 Calls: {total['n']} (₹{total['inr']:.2f}) · this month ₹{budget.month_spend(cfg, end):.0f} of "
+             f"{inr(cfg['budget']['monthly_cap_inr'])} · free calls left {budget.free_left(cfg)}"]
+    if failed:
+        lines.append(f"⚠️ Failed calls: {failed}")
+    if why := budget.blocked(cfg, end):
+        lines.append(f"⛔ Checks blocked: {why}")
+    lines.append("")
+    for u in used:
+        c = calls.get(u)
+        who = "older calls" if u is None else html.escape(names.get(u, str(u))) + (" (admin)" if u == admin else "")
+        bits = [f"{c['n']} calls (₹{c['inr']:.2f})" if c else "0 calls"]
+        if c and c["manual"]:
+            bits.append(f"{c['manual']} check-now")
+        if c and c["searches"]:
+            bits.append(f"{c['searches']} searches")
+        if u is not None:
+            bits.append(f"{routes.get(u, 0)} active routes" + (f" (+{new[u]['n']} new)" if u in new else ""))
+            bits.append(f"{alerted[u]['n'] if u in alerted else 0} alerts")
+        lines.append(f"• {who}: " + " · ".join(bits))
+    if not used:
+        lines.append("Nobody used the bot.")
+    lines += ["", projection_text(cfg, end)]
+    return "\n".join(lines)
+
+
+async def user_names(ctx, uids):
+    """Telegram display names for the report; a user the bot can't look up is shown by id."""
+    names = {}
+    for uid in uids:
+        try:
+            chat = await ctx.bot.get_chat(uid)
+            names[uid] = chat.full_name or chat.username or str(uid)
+        except TelegramError:
+            pass
+    return names
+
+
 async def summary(ctx: ContextTypes.DEFAULT_TYPE):
+    """Admin only: the daily report for today so far, plus the 7-day report on weekly_summary_day."""
     cfg, now = cfg_of(ctx), now_utc()
-    rows = db.q("SELECT * FROM routes WHERE status='active' ORDER BY id")
-    await send(ctx, "☀️ Daily summary\n" + "\n".join(route_line(r, now) for r in rows or [])
-               + f"\nSpent this month ₹{budget.month_spend(cfg, now):.0f} of {inr(cfg['budget']['monthly_cap_inr'])} · "
-               f"free calls left {budget.free_left(cfg)}")
+    if not cfg["monitoring"]["admin_notices"]:
+        return
+    loc = checker.local(cfg, now)
+    today = loc.replace(hour=0, minute=0, second=0, microsecond=0)
+    reports = [(f"📊 Daily report · {loc:%a %d %b}", today)]
+    if loc.strftime("%a") == cfg["monitoring"]["weekly_summary_day"]:
+        week = today - timedelta(days=6)
+        reports.append((f"📅 Weekly report · {week:%d %b} – {loc:%d %b}", week))
+    names = await user_names(ctx, [int(os.environ["ALLOWED_USER_ID"]), *alert_ids()])
+    for title, start in reports:
+        await send(ctx, report_text(cfg, title, start, now, names))
 
 
 def save_backup(keep, today):

@@ -10,7 +10,9 @@ Tables
                   rule: new_low, target (level HIT/NEAR), book_by. Rows of removed rules
                         (deal, cheaper_date) are deleted by init().
   alerts        Every alert line sent. Lines sent in one message share `batch`.
-  spend, kv     Unchanged.
+  spend         One row per API attempt. user_id = whose route or search caused it (NULL for older
+                rows and validate.py), for the admin reports.
+  kv            Small flags and counters.
 
 Derived, never stored: lowest seen, sample count, current price (see the query helpers).
 All timestamps are UTC ISO strings from iso(), so string comparison = time comparison.
@@ -50,7 +52,7 @@ CREATE TABLE IF NOT EXISTS alert_state(
   PRIMARY KEY(route_id, rule, depart_date)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS spend(
   id INTEGER PRIMARY KEY, ts TEXT NOT NULL, month TEXT NOT NULL, provider TEXT NOT NULL,
-  kind TEXT NOT NULL, est_inr REAL NOT NULL);
+  kind TEXT NOT NULL, est_inr REAL NOT NULL, user_id INTEGER);
 CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT);
 """
 
@@ -71,6 +73,9 @@ ADDED_COLUMNS = {
         ("headline", "INTEGER NOT NULL DEFAULT 0"),
         ("unverified", "INTEGER NOT NULL DEFAULT 0"),
         ("batch", "TEXT"),
+    ],
+    "spend": [
+        ("user_id", "INTEGER"),  # 2026-10-17: who caused the call (route owner / searcher); NULL before
     ],
 }
 

@@ -113,7 +113,7 @@ def fetch(cfg, r, day, kind, now):
         if e.status == 429:
             budget.pause(cfg, now)
     finally:
-        msgs = budget.record(cfg, now, kind, attempts)
+        msgs = budget.record(cfg, now, kind, attempts, r["owner_id"])
     log.info("ignav %s %s→%s %s ok=%s price=%s err=%s", kind, r["origin"], r["destination"], day,
              obs["ok"], obs.get("price_inr"), obs.get("error"))
     return obs, msgs

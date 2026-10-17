@@ -5,7 +5,7 @@ A Multi-user Telegram bot that watches domestic Indian fares through the Ignav A
 ## Files
 | File | Role |
 |---|---|
-| `bot.py` | Entry point. Holds the Telegram commands and the tick, heartbeat, daily summary and nightly backup jobs |
+| `bot.py` | Entry point. Holds the Telegram commands and the tick, heartbeat, admin daily/weekly report and nightly backup jobs |
 | `checker.py` | Runs the scheduled checks of each route's date, plus active hours and expiry |
 | `alerts.py` | Alert rules (pure `decide()`) and the message text |
 | `providers.py` | Ignav client. This is the only data source |

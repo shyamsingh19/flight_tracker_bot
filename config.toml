@@ -49,12 +49,13 @@ ignav_free_calls    = 1000       # free calls before billing starts; /status sho
 fail_notify_after   = 3          # send an error message after 3 failed searches in a row…
 fail_notify_after_min = 60       # …or after 60 minutes of errors
 fail_notify_cooldown_min = 60    # at most one error message per route per 60 minutes
-daily_summary_at    = "08:30"
+daily_summary_at    = "23:45"    # admin's daily report (users, calls, money) covering today so far
+weekly_summary_day  = "Sun"      # that day the admin also gets the report for the last 7 days
 heartbeat_every_min = 30         # how often to ping HEARTBEAT_URL (if set in .env)
 backup_at           = "02:00"    # nightly database backup, saved in backups/ (and sent to the admin)
 backup_keep         = 14         # nightly backups kept in backups/; older ones are deleted
 log_level           = "INFO"
-admin_notices       = true       # false = admin gets only price alerts (no summary, backup, warnings, errors)
+admin_notices       = true       # false = admin gets only price alerts (no reports, backup, warnings, errors)
 
 [ui]
 history_default_n   = 20         # rows shown by /history and /calls

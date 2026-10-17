@@ -75,7 +75,7 @@ Each alert includes a Google Flights link. **Book on the airline's website.** Th
 
 ### Other messages
 Every user gets alerts for their own routes, and a notice when one expires. The admin also gets:
-- the **08:30 daily summary** of every route,
+- a **daily report at 23:45** for that day: how many users have access and how many used the bot, each user's calls, check-nows, searches, active and new routes and alerts, the day's calls and money, month-to-date spend, free calls left, failed calls and projected monthly cost. On Sundays a **weekly report** with the same figures for the last 7 days follows it (`daily_summary_at`, `weekly_summary_day`). Other users never get reports,
 - the **02:00 nightly backup** (`.db` file),
 - a **failure notice** if Ignav keeps failing (3 failures in a row, or 60 minutes of errors),
 - **budget warnings** at 50%, 80% and 100% of the monthly cap.

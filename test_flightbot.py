@@ -437,7 +437,7 @@ class TestGuidedFlow(Base):
         self.fake.prices["2026-11-06"] = [offer(9922, "2026-11-06", "6E668", stops=1),
                                           offer(11200, "2026-11-06", "AI2880", dep="17:45") | {"arr_local": "2026-11-06T20:00:00"}]
         s = {"o": "HYD", "d": "DEL", "day": "2026-11-06", "direct": False}
-        s["offers"] = bot.run_search(self.cfg, "HYD", "DEL", "2026-11-06", at("2026-10-13", 15))
+        s["offers"] = bot.run_search(self.cfg, "HYD", "DEL", "2026-11-06", at("2026-10-13", 15), 1)
         self.assertEqual(budget.calls_used(), 1)
         text, kb = bot.results_view(self.cfg, s, 1)
         self.assertIn("1 stop", text)
@@ -507,6 +507,20 @@ class TestGuidedFlow(Base):
             with self.assertRaises(bot.ApplicationHandlerStop):
                 asyncio.run(bot.gate(upd(uid, text), None))
         self.assertEqual(sent, ["⛔ Admin only."] * 2)  # stranger gets no reply
+
+    def test_admin_report_per_user(self):
+        os.environ |= {"ALLOWED_USER_ID": "1", "ALERT_USER_IDS": "2,3"}
+        r1, r2 = self.route(target_inr=7000), self.route(owner_id=2)
+        self.check(r1, 6000, at("2026-12-01", 9))  # alerts (target)
+        self.check(r2, 6000, at("2026-12-01", 10), kind="manual")
+        bot.run_search(self.cfg, "HYD", "BOM", D, at("2026-12-01", 11), 2)
+        self.check(r1, 6000, at("2026-11-30", 9))  # the day before: not in today's report
+        text = bot.report_text(self.cfg, "Daily", at("2026-12-01", 0), at("2026-12-01", 23), {1: "Asha"})
+        self.assertIn("Users: 3 with access, 2 used the bot", text)
+        self.assertIn("Calls: 3 (₹0.00)", text)
+        self.assertIn("• Asha (admin): 1 calls (₹0.00) · 1 active routes (+1 new) · 1 alerts", text)
+        self.assertIn("• 2: 2 calls (₹0.00) · 1 check-now · 1 searches · 1 active routes (+1 new) · 0 alerts", text)
+        self.assertNotIn("• 3", text)  # has access, used nothing
 
     def test_backup_keeps_newest(self):
         for i in range(1, 5):
