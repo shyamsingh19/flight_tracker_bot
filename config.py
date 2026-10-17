@@ -44,18 +44,9 @@ SCHEMA = {
         "active_hours": ("08-23", hours),
         "tick_seconds": (60, int, 10, 600),
         "anchor_every_min": (60, int, 1, 1440),
-        "buffer_scan_every_h": (24, int, 0, 24 * 14),
-        "buffer_scan_at": ("08:00", hhmm),
-        "alt_watch_every_h": (3, int, 0, 24),
         "far_out_days": (45, int, 1, 365),
         "far_out_slowdown": (3, int, 1, 10),
         "min_interval_min": (15, int, 1, 1440),
-    },
-    "route_defaults": {
-        "flex_days": (5, int, 0, 30),
-        "max_flex_days": (7, int, 0, 30),
-        "burst_flex_days": (5, int, 0, 30),
-        "burst_cooldown_h": (12, float, 0, 720),
     },
     "deal": {
         "baseline_days": (30, int, 1, 365),
@@ -66,14 +57,8 @@ SCHEMA = {
         "min_lead_h": (3, float, 0, 72),
         "deadline_days": (14, int, 0, 365),
         "suspicious_pct": (30, float, 0, 100),
-        "alt_cheaper_abs_inr": (300, int, 0, 10**6),
-        "alt_cheaper_pct": (5, float, 0, 100),
-        "alt_realert_h": (24, float, 0, 720),
-        "alt_realert_abs_inr": (100, int, 0, 10**6),
         "realert_abs_inr": (100, int, 0, 10**6),
         "realert_pct": (3, float, 0, 100),
-        "near_tie_inr": (200, int, 0, 10**6),
-        "near_tie_pct": (3, float, 0, 100),
         "recheck_unverified": (True, bool),
         "recheck_tolerance_pct": (2, float, 0, 100),
         "target_buffer_inr": (300, int, 0, 10**6),
@@ -105,7 +90,6 @@ SCHEMA = {
     "ui": {
         "history_default_n": (20, int, 1, 500),
         "search_results_n": (5, int, 1, 20),
-        "checknow_confirm_above_inr": (1, float, 0, 10**5),
         "checknow_per_user_day": (5, int, 0, 1000),
     },
 }
@@ -160,17 +144,9 @@ def load(path="config.toml"):
 
 
 def _cross_check(cfg):
-    s, rd, d = cfg["schedule"], cfg["route_defaults"], cfg["deal"]
-    a, b = s["active_hours"]
-    checks = [
-        (s["buffer_scan_every_h"] % 24 == 0, "[schedule] buffer_scan_every_h must be 0 or a multiple of 24"),
-        (a * 60 <= s["buffer_scan_at"] <= b * 60, "[schedule] buffer_scan_at must be inside active_hours"),
-        (rd["flex_days"] <= rd["max_flex_days"], "[route_defaults] flex_days must be <= max_flex_days"),
-        (d["great_percentile"] <= d["good_percentile"], "[deal] great_percentile must be <= good_percentile"),
-    ]
-    for ok, msg in checks:
-        if not ok:
-            raise ConfigError(msg)
+    d = cfg["deal"]
+    if d["great_percentile"] > d["good_percentile"]:
+        raise ConfigError("[deal] great_percentile must be <= good_percentile")
 
 
 def load_env(path=".env"):
@@ -187,29 +163,14 @@ def load_env(path=".env"):
 
 # ---- projected cost: everything below is derived from the config ----
 
-def day_slots(start_min, every_min, end_min):
-    return list(range(start_min, end_min + 1, every_min)) if every_min > 0 else []
-
-
 def job_slots(cfg, anchor_every_min, slow=1):
-    """{kind: (minute-of-day slots, every_n_days)} — used by both the scheduler and the cost formula."""
-    s = cfg["schedule"]
-    a, b = s["active_hours"]
-    alt = s["alt_watch_every_h"] * 60 * slow
-    scan_days = s["buffer_scan_every_h"] // 24 * slow
-    return {
-        "anchor": (day_slots(a * 60, anchor_every_min * slow, b * 60), 1),
-        "scan": ([s["buffer_scan_at"]] if scan_days else [], scan_days or 1),
-        "alt": (day_slots(s["buffer_scan_at"] + alt, alt, b * 60), 1),
-    }
+    """Minute-of-day slots when your date is searched — used by both the scheduler and the cost formula."""
+    a, b = cfg["schedule"]["active_hours"]
+    return list(range(a * 60, b * 60 + 1, anchor_every_min * slow))
 
 
-def calls_per_day(cfg, flex, anchor_every_min, slow=1, with_alt=True):
-    j = job_slots(cfg, anchor_every_min, slow)
-    n = len(j["anchor"][0]) + len(j["scan"][0]) * 2 * flex / j["scan"][1]
-    if with_alt and flex:
-        n += len(j["alt"][0])
-    return n
+def calls_per_day(cfg, anchor_every_min, slow=1):
+    return len(job_slots(cfg, anchor_every_min, slow))
 
 
 def per_call_inr(cfg):

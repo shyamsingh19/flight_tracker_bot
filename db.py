@@ -1,18 +1,17 @@
 """SQLite (WAL). A short-lived connection per call keeps the bot thread and the check thread apart.
 
 Tables
-  routes        One tracked trip: D (anchor_date), flex_days, target, schedule bookkeeping.
+  routes        One tracked trip: one date D (anchor_date), target, schedule bookkeeping.
   observations  One row per fetched price for one date. Only `valid` is ever updated.
                   valid          1 = usable, 0 = rejected (bad price or failed re-check),
                                  NULL = re-check could not run (sent as unverified; rules ignore it).
                   baseline_slot  UTC start of the scheduled slot this row fills, else NULL.
                                  At most one row per (route, date, slot); only these rows form
-                                 the GOOD/GREAT baseline. Bursts get a slot only when they
-                                 replace a scheduled scan; re-checks never do.
+                                 the GOOD/GREAT baseline. Manual checks and re-checks never do.
                   recheck_of     id of the observation this row re-checked, else NULL.
   alert_state   Re-alert memory, one row per (route, rule, date). Deleting a row resets it.
                   rule: deal (GOOD/GREAT, level says which), new_low, target (level HIT/NEAR),
-                        cheaper_date, book_by.
+                        book_by. Old rows may also hold cheaper_date (removed rule).
   alerts        Every alert line sent. Lines sent in one message share `batch`.
   spend, kv     Unchanged.
 
@@ -31,11 +30,10 @@ SCHEMA_VERSION = 2
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS routes(
   id INTEGER PRIMARY KEY, origin TEXT NOT NULL, destination TEXT NOT NULL, anchor_date TEXT NOT NULL,
-  flex_days INTEGER NOT NULL, alt_date TEXT, airline TEXT, flight_no TEXT, max_stops INTEGER,
+  airline TEXT, flight_no TEXT, max_stops INTEGER,
   time_start INTEGER, time_end INTEGER, min_bags INTEGER, target_inr INTEGER, target_buffer_inr INTEGER,
   anchor_every_min INTEGER, calibration INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'active',
-  created_at TEXT NOT NULL, last_anchor_at TEXT, last_scan_at TEXT, last_alt_at TEXT,
-  skip_next_scan INTEGER NOT NULL DEFAULT 0, last_burst_at TEXT,
+  created_at TEXT NOT NULL, last_anchor_at TEXT,
   consecutive_failures INTEGER NOT NULL DEFAULT 0, first_failure_at TEXT,
   last_fail_notify_at TEXT, owner_id INTEGER);
 CREATE TABLE IF NOT EXISTS observations(
@@ -79,6 +77,11 @@ ADDED_COLUMNS = {
         ("batch", "TEXT"),
     ],
 }
+
+# Columns of removed features (nearby dates, 2026-10-17). flex_days is NOT NULL, so old databases
+# must lose it or inserting a route fails.
+DROPPED_COLUMNS = {"routes": ["flex_days", "alt_date", "last_scan_at", "last_alt_at", "skip_next_scan",
+                              "last_burst_at"]}
 
 INDEXES = """
 CREATE INDEX IF NOT EXISTS obs_route_date ON observations(route_id, depart_date, observed_at);
@@ -149,6 +152,11 @@ def init():
             for name, decl in cols:
                 if name not in have:
                     c.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+        for table, cols in DROPPED_COLUMNS.items():
+            have = {r[1] for r in c.execute(f"PRAGMA table_info({table})")}
+            for name in cols:
+                if name in have:
+                    c.execute(f"ALTER TABLE {table} DROP COLUMN {name}")
         c.executescript(INDEXES)
         if c.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION:
             with c:
@@ -161,7 +169,7 @@ def init():
 def backfill_baseline_slots(kinds, slot_minutes):
     """Optional, run once after upgrading: give old scheduled rows a baseline slot so GOOD/GREAT
     is not silent while the baseline refills. `kinds` = the observation kinds your scheduler
-    wrote for scheduled scans (not bursts, not re-checks). First row in each slot wins."""
+    wrote for scheduled checks (not manual checks, not re-checks). First row in each slot wins."""
     marks = ", ".join("?" * len(kinds))
     rows = q(f"SELECT id, observed_at FROM observations WHERE baseline_slot IS NULL AND valid = 1"
              f" AND recheck_of IS NULL AND kind IN ({marks}) ORDER BY observed_at, id", tuple(kinds))

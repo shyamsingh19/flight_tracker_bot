@@ -1,9 +1,9 @@
-"""Scheduled checks: anchor date D, buffer scan, alternative watch, burst.
+"""Scheduled checks of the route's date D (one date per route: no nearby dates).
 Runs in a worker thread; every function returns the Telegram messages to send."""
 import html
 import logging
 import uuid
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import alerts
@@ -33,39 +33,22 @@ def slowdown(cfg, r, now):
 
 
 def projected(cfg, now, extra=None):
-    """(without, with) alternative watch, ₹/month for active routes (+ an unsaved one)."""
+    """₹/month for active routes (+ an unsaved one)."""
     rows = list(db.q("SELECT * FROM routes WHERE status='active'")) + ([extra] if extra else [])
-    lo = hi = 0.0
-    for r in rows:
-        args = (cfg, r["flex_days"], anchor_every(cfg, r), slowdown(cfg, r, now))
-        lo += config.calls_per_day(*args, with_alt=False)
-        hi += config.calls_per_day(*args, with_alt=True)
-    return config.monthly_inr(cfg, lo), config.monthly_inr(cfg, hi)
+    return config.monthly_inr(cfg, sum(config.calls_per_day(cfg, anchor_every(cfg, r), slowdown(cfg, r, now))
+                                       for r in rows))
 
 
-def latest_slot(minutes, every_days, now_local):
-    """Most recent scheduled time <= now, or None."""
-    for back in range(every_days + 1):
-        day = now_local.date() - timedelta(days=back)
-        if day.toordinal() % every_days:
-            continue
-        for m in reversed(minutes):
-            t = datetime.combine(day, time(m // 60, m % 60), now_local.tzinfo)
-            if t <= now_local:
-                return t
-    return None
+def latest_slot(minutes, now_local):
+    """Most recent scheduled time today <= now, or None."""
+    past = [m for m in minutes if m <= now_local.hour * 60 + now_local.minute]
+    return now_local.replace(hour=past[-1] // 60, minute=past[-1] % 60, second=0, microsecond=0) if past else None
 
 
 def in_active(cfg, now_local):
     a, b = cfg["schedule"]["active_hours"]
     m = now_local.hour * 60 + now_local.minute + now_local.second / 60
     return a * 60 <= m <= b * 60 + 2 * cfg["schedule"]["tick_seconds"] / 60
-
-
-def buffer_dates(anchor, flex, today):
-    d = date.fromisoformat(anchor)
-    return [(d + timedelta(days=k)).isoformat() for k in range(-flex, flex + 1)
-            if k and d + timedelta(days=k) >= today]
 
 
 def once(key, text):
@@ -89,14 +72,11 @@ def run_due(cfg, now=None):
             continue
         if not in_active(cfg, loc):
             continue
-        jobs = config.job_slots(cfg, anchor_every(cfg, r), slowdown(cfg, r, now))
-        for kind, job in (("anchor", job_anchor), ("scan", job_scan), ("alt", job_alt)):
-            r = db.route(r["id"])
-            slot = latest_slot(*jobs[kind], loc)
-            if not slot or (r[f"last_{kind}_at"] and parse(r[f"last_{kind}_at"]) >= slot):
-                continue
-            db.update_route(r["id"], **{f"last_{kind}_at": iso(slot)})  # a failed slot is not retried
-            msgs += job(cfg, r, now, iso(slot))
+        slot = latest_slot(config.job_slots(cfg, anchor_every(cfg, r), slowdown(cfg, r, now)), loc)
+        if not slot or (r["last_anchor_at"] and parse(r["last_anchor_at"]) >= slot):
+            continue
+        db.update_route(r["id"], last_anchor_at=iso(slot))  # a failed slot is not retried
+        msgs += scan(cfg, r, "anchor", now, iso(slot))
     return msgs
 
 
@@ -110,45 +90,6 @@ def expired(r, loc):
         if o and datetime.fromisoformat(o["dep_local"][:16]) <= loc.replace(tzinfo=None):
             return "flight departed"
     return None
-
-
-def job_anchor(cfg, r, now, slot=None):
-    return scan(cfg, r, [r["anchor_date"]], "anchor", now, slot)
-
-
-def job_scan(cfg, r, now, slot=None):
-    if r["skip_next_scan"]:  # a burst already refreshed these dates
-        db.update_route(r["id"], skip_next_scan=0)
-        return []
-    msgs = scan(cfg, r, buffer_dates(r["anchor_date"], r["flex_days"], local(cfg, now).date()), "scan", now, slot)
-    db.update_route(r["id"], last_alt_at=iso(now))  # the scan just checked the alternative too
-    pick_alt(cfg, r["id"], now)
-    return msgs
-
-
-def job_alt(cfg, r, now, slot=None):
-    if not r["alt_date"] or r["alt_date"] < local(cfg, now).date().isoformat():
-        pick_alt(cfg, r["id"], now)
-        return []
-    msgs = scan(cfg, r, [r["alt_date"]], "alt", now, slot)
-    pick_alt(cfg, r["id"], now)
-    return msgs
-
-
-def pick_alt(cfg, rid, now):
-    """Watch the cheapest fresh buffer date if it's cheaper than D or within the near-tie margin."""
-    r, d = db.route(rid), cfg["deal"]
-    fresh = now - timedelta(hours=d["freshness_h"])
-    dp = db.current_price(rid, r["anchor_date"], fresh)
-    best = None
-    for day in buffer_dates(r["anchor_date"], r["flex_days"], local(cfg, now).date()):
-        o = db.current_price(rid, day, fresh)
-        if o and (best is None or o["price_inr"] < best[1]):
-            best = (day, o["price_inr"])
-    alt = None
-    if best and dp and best[1] - dp["price_inr"] <= max(d["near_tie_inr"], dp["price_inr"] * d["near_tie_pct"] / 100):
-        alt = best[0]
-    db.update_route(rid, alt_date=alt)
 
 
 # ---------------------------------------------------------------- one query
@@ -196,25 +137,22 @@ def valid(cfg, obs, now):
     return int(dep - now > timedelta(hours=cfg["deal"]["min_lead_h"]))
 
 
-def context(cfg, r, day, now):
-    """What the rules compare a new price of `day` against, read before that price is saved."""
-    rid, d = r["id"], cfg["deal"]
-    is_anchor = day == r["anchor_date"]
+def context(cfg, r, now):
+    """What the rules compare a new price of D against, read before that price is saved."""
+    rid, day = r["id"], r["anchor_date"]
     lowest, first_seen = db.lowest_seen(rid, day)
-    dp = None if is_anchor else db.current_price(rid, r["anchor_date"], now - timedelta(hours=d["freshness_h"]))
-    return {"day": day, "is_anchor": is_anchor, "lowest": lowest, "first_seen": first_seen,
-            "baseline": db.baseline_prices(rid, day, now - timedelta(days=d["baseline_days"])) if is_anchor else [],
-            "d_price": dp["price_inr"] if dp else None}
+    return {"day": day, "lowest": lowest, "first_seen": first_seen,
+            "baseline": db.baseline_prices(rid, day, now - timedelta(days=cfg["deal"]["baseline_days"]))}
 
 
-def decide(cfg, r, price, ctx, now):
-    return alerts.decide(cfg, now, price=price, target=r["target_inr"], target_buffer=r["target_buffer_inr"],
+def decide(cfg, r, price, ctx):
+    return alerts.decide(cfg, price=price, target=r["target_inr"], target_buffer=r["target_buffer_inr"],
                          states=db.alert_states(r["id"]), **ctx)
 
 
 def evaluate(cfg, r, obs, ctx, now):
     """Rules for one fresh valid price, re-checked if needed → (spend messages, hits for the message)."""
-    fired, clear = decide(cfg, r, obs["price_inr"], ctx, now)
+    fired, clear = decide(cfg, r, obs["price_inr"], ctx)
     msgs, unverified = [], False
     if fired and alerts.needs_recheck(cfg, obs, ctx["lowest"]):
         re = None
@@ -231,7 +169,7 @@ def evaluate(cfg, r, obs, ctx, now):
             return msgs, []
         else:
             obs = re
-            fired, clear = decide(cfg, r, obs["price_inr"], ctx, now)
+            fired, clear = decide(cfg, r, obs["price_inr"], ctx)
     if not unverified:
         for rule in clear:
             db.clear_alert_state(r["id"], rule, ctx["day"])
@@ -267,57 +205,32 @@ def deliver(cfg, r, hits, now):
     return m
 
 
-def scan(cfg, r, days, kind, now, slot=None):
-    """Fetch each date, then evaluate every rule together → at most one alert message (+ a burst's).
+def scan(cfg, r, kind, now, slot=None):
+    """Fetch D, then evaluate every rule together → at most one alert message.
     `slot` (iso) marks scheduled fetches as baseline samples."""
     msgs, hits = [], []
-    for day in days:
-        if why := budget.blocked(cfg, now):
-            msgs += once(f"blocked:{budget.month_key(cfg, now)}:{why}", f"⛔ Ignav checks stopped: {why}.")
-            break
-        obs, m = fetch(cfg, r, day, kind, now)
-        msgs += m
+    if why := budget.blocked(cfg, now):
+        msgs += once(f"blocked:{budget.month_key(cfg, now)}:{why}", f"⛔ Ignav checks stopped: {why}.")
+    else:
+        obs, msgs = fetch(cfg, r, r["anchor_date"], kind, now)
         obs |= {"baseline_slot": slot, "valid": valid(cfg, obs, now)}
-        ctx = context(cfg, r, day, now) if obs["valid"] else None
+        ctx = context(cfg, r, now) if obs["valid"] else None
         obs["id"] = db.add_observation(obs)
         if not obs["ok"]:
             msgs += on_failure(cfg, r, obs, now)
-            continue
-        db.update_route(r["id"], consecutive_failures=0, first_failure_at=None)
-        if ctx:
-            m, h = evaluate(cfg, r, obs, ctx, now)
-            msgs += m
-            hits += h
-    # only scans that include D, so the anchor and buffer scans of one tick can't both send it
-    if r["anchor_date"] in days and alerts.book_by_due(cfg, local(cfg, now).date(), r["anchor_date"],
-                                                       db.alert_states(r["id"])):
+        else:
+            db.update_route(r["id"], consecutive_failures=0, first_failure_at=None)
+            if ctx:
+                m, hits = evaluate(cfg, r, obs, ctx, now)
+                msgs += m
+    if alerts.book_by_due(cfg, local(cfg, now).date(), r["anchor_date"], db.alert_states(r["id"])):
         hits.append(book_by_hit(cfg, r, now))
-    if not hits:
-        return msgs
-    hits.sort(key=alerts.priority)
-    msgs.append(deliver(cfg, r, hits, now))
-    head = hits[0]
-    if kind != "burst" and head["day"] == r["anchor_date"] and head["rule"] in ("deal", "new_low", "target"):
-        msgs += burst(cfg, r, now)
+    if hits:
+        hits.sort(key=alerts.priority)
+        msgs.append(deliver(cfg, r, hits, now))
     return msgs
 
 
-def burst(cfg, r, now):
-    """Headline alert on D: search D±burst_flex_days right away, as its own scan. Replaces the next buffer scan."""
-    rd = cfg["route_defaults"]
-    if r["last_burst_at"] and now - parse(r["last_burst_at"]) < timedelta(hours=rd["burst_cooldown_h"]):
-        return []
-    # ponytail: burst rows never get a baseline_slot; the baseline is D-only and a burst never fetches D
-    msgs = scan(cfg, r, buffer_dates(r["anchor_date"], rd["burst_flex_days"], local(cfg, now).date()), "burst", now)
-    db.update_route(r["id"], last_burst_at=iso(now), last_alt_at=iso(now),
-                    skip_next_scan=int(rd["burst_flex_days"] >= r["flex_days"]))
-    pick_alt(cfg, r["id"], now)
-    return msgs
-
-
-def check_now(cfg, rid, dates, now=None):
-    """/checknow: manual checks, any time of day."""
-    now = now or datetime.now(UTC)
-    msgs = scan(cfg, db.route(rid), dates, "manual", now)
-    pick_alt(cfg, rid, now)
-    return msgs
+def check_now(cfg, rid, now=None):
+    """/checknow: one manual check of D, any time of day."""
+    return scan(cfg, db.route(rid), "manual", now or datetime.now(UTC))

@@ -1,10 +1,6 @@
 # Flight price alert settings. Secrets go in .env, not here.
 # After editing, send /reload. The bot checks the file and replies with the new
 # monthly cost estimate. If the file is invalid, the old settings stay active.
-#
-# Terms used below:
-#   travel date   the date you asked for in /track
-#   nearby dates  travel date ± flex_days
 
 [search]                         # what every flight search asks for
 market              = "IN"       # IN gives prices in rupees
@@ -18,19 +14,10 @@ allow_self_transfer = false      # false = skip itineraries where you re-check b
 timezone            = "Asia/Kolkata"
 active_hours        = "08-23"    # searches run only in these hours (end included); "00-23" = all day
 tick_seconds        = 60         # how often the bot checks if a search is due (free)
-anchor_every_min    = 30         # search the travel date every N minutes
-buffer_scan_every_h = 24         # search nearby dates every N hours (24, 48…); 0 = only after a good deal
-buffer_scan_at      = "08:00"    # time of day for the nearby-dates search
-alt_watch_every_h   = 3          # re-check the cheapest nearby date every N hours; 0 = off
+anchor_every_min    = 30         # search your date every N minutes
 far_out_days        = 45         # trips more than this many days away…
 far_out_slowdown    = 3          # …are searched this many times less often
 min_interval_min    = 15         # no route can be searched more often than this
-
-[route_defaults]                 # defaults for /track
-flex_days           = 2          # nearby dates = travel date ± this many days
-max_flex_days       = 7          # largest flex= /track accepts
-burst_flex_days     = 5          # on a good deal, search ± this many days right away
-burst_cooldown_h    = 12         # wait at least this long between those extra searches
 
 [deal]                           # when an alert is sent
 baseline_days       = 30         # "normal price" = your date's scheduled prices in the last N days
@@ -41,14 +28,8 @@ freshness_h         = 26         # prices older than this are left out of compar
 min_lead_h          = 3          # ignore flights leaving within 3 h (too late to book)
 deadline_days       = 14         # ⏰ one "book by" reminder 14 days before your date
 suspicious_pct      = 30         # search again before alerting a price 30% below the lowest seen
-alt_cheaper_abs_inr = 300        # "cheaper nearby date" alert: saves ₹300 or 5%, whichever is larger
-alt_cheaper_pct     = 5
-alt_realert_h       = 24         # alert about the same nearby date at most once per 24 h…
-alt_realert_abs_inr = 100        # …unless the saving grows by another ₹100
 realert_abs_inr     = 100        # repeat a deal/new-low/target alert only if ₹100 or 3% lower, whichever is larger;
 realert_pct         = 3          #   a good/great deal must also be that far below the median
-near_tie_inr        = 200        # a nearby date within ₹200 or 3% of the travel date
-near_tie_pct        = 3          #   gets re-checked every alt_watch_every_h
 recheck_unverified  = true       # search again to confirm a cached price before alerting
 recheck_tolerance_pct = 2        # alert only if the second price is within 2% of the first
 target_buffer_inr   = 300        # 🎯 alert when price ≤ your target + ₹300
@@ -80,5 +61,4 @@ admin_notices       = true       # false = admin gets only price alerts (no summ
 [ui]
 history_default_n   = 20         # rows shown by /history and /calls
 search_results_n    = 5          # flights shown after a menu search
-checknow_confirm_above_inr = 1   # /checknow asks first if it would cost more than this
 checknow_per_user_day = 5        # manual checks (/checknow, 🔄) each user may run per day; 0 = none

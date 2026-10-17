@@ -1,8 +1,9 @@
 """Pure alert rules and message text. No I/O.
 
 Goal: get the cheapest fare for your date D, and tell you when it is worth booking.
+A route watches exactly one date. To watch another day, track it as its own route.
 Every number below is a [deal] key in config.toml unless noted. Rules only read prices that
-were already fetched. `now` is passed in (timezone-aware) and never read inside this module.
+were already fetched. The clock is never read inside this module.
 
 DEFINITIONS
   price        Cheapest all-in INR fare for a date (1 adult, one-way, economy) as returned by
@@ -14,31 +15,25 @@ DEFINITIONS
                valid price. A date with no fresh price is skipped this scan.
   step(p, a, b)  max(a, b × p). "Meaningfully lower than p" means ≤ p − step(p, a, b).
                realert step = step(p, realert_abs_inr, realert_pct)
-               alt step     = step(p, alt_cheaper_abs_inr, alt_cheaper_pct)
   lowest seen  Lowest valid price this system has recorded for D, from any fetch, since
                first_seen. It is the lowest WE recorded, never a historical all-time low, and
                messages say so ("lowest we've recorded since <first_seen>").
-  baseline     D's own prices from scheduled scans in the last baseline_days, one sample per
-               scheduled slot. A burst that replaces a scheduled scan counts as that scan;
-               other bursts and all re-checks never enter. D±flex dates are not mixed in.
+  baseline     D's prices from scheduled checks in the last baseline_days, one sample per
+               scheduled slot. Manual checks and re-checks never enter.
 
-RULES  (D = your date; alt = any other tracked date in D±flex)
-  🟢 GOOD / GREAT  D only. Silent until the baseline has min_samples samples.
+RULES  (D = your date)
+  🟢 GOOD / GREAT  Silent until the baseline has min_samples samples.
                    GOOD:  current price is strictly below the baseline's good_percentile AND
                           meaningfully lower (realert step) than the baseline median.
                    GREAT: same test with great_percentile.
                    The strict "below" plus the median gap means a flat price is never a deal.
-  📉 NEW LOW       D only, after min_samples. Current price is strictly below lowest seen.
+  📉 NEW LOW       After min_samples. Current price is strictly below lowest seen.
                    (Replaces DROP: no false alarm when a spike recovers to a normal price.)
-  🎯 TARGET        Any tracked date with a target (/settarget price [buffer]; buffer defaults
+  🎯 TARGET        Routes with a target (/settarget price [buffer]; buffer defaults
                    to target_buffer_inr).
                    HIT:  price ≤ target.     Message: "at/below your target".
                    NEAR: price ≤ target + buffer.   Message: "within ₹X of your target".
                    The message always names the date.
-  💡 CHEAPER DATE  An alt date's current price is meaningfully lower (alt step) than D's
-                   current price. Both prices must be fresh. Per alt date: re-alerts after
-                   alt_realert_h if it still qualifies, or sooner if the saving grew by
-                   alt_realert_abs_inr.
   ⏰ BOOK BY       Once, on the first scan at or after deadline_days before D. Sends D's current
                    price and lowest seen regardless of every other rule, because fares usually
                    rise near departure. If D has no fresh price, the message says so.
@@ -49,11 +44,11 @@ RE-ALERT STATE  (one record per rule × date: last_alert_price, last_level)
     - the price is meaningfully lower (realert step) than last_alert_price, or
     - the deal went away and came back: once a fresh price ≥ last_alert_price + realert step
       is seen, the record is cleared, so the next qualifying price alerts as new.
-  CHEAPER DATE uses its own timing (above). BOOK BY fires once.
+  BOOK BY fires once.
 
 ONE MESSAGE PER SCAN
   All rules are evaluated together and produce at most one message. Headline by priority:
-    🎯 HIT > 🟢 GREAT > ⏰ BOOK BY > 🎯 NEAR > 🟢 GOOD > 📉 NEW LOW > 💡 CHEAPER DATE
+    🎯 HIT > 🟢 GREAT > ⏰ BOOK BY > 🎯 NEAR > 🟢 GOOD > 📉 NEW LOW
   Other rules that fired are listed as lines under the headline. Every message shows the date,
   price, airline (if known) and "indicative, confirm on booking page".
 
@@ -67,20 +62,13 @@ RE-CHECK  (1 call, only after a rule fired, only for prices that will appear in 
     - Re-check call fails → send the alert marked ⚠️ unverified, but do not update lowest
       seen or re-alert state with that price.
 
-BURST  (one call per date, searches D±burst_flex_days)
-  After a headline alert on D (HIT, GREAT, NEAR, GOOD, NEW LOW), at most every
-  burst_cooldown_h ([route_defaults]). Burst results are evaluated as a new scan: same rules,
-  same dedupe, at most one message. They update lowest seen and current prices, and enter the
-  baseline only when the burst replaces the next scheduled scan.
-
 API CALLS
-  Deciding costs nothing. Extra calls happen only after a rule fired: at most 1 re-check per
-  alerted price, and at most 1 burst per burst_cooldown_h. Looser thresholds mean more
-  messages, re-checks and bursts; tighten them to save calls.
+  Deciding costs nothing. The only extra call is at most 1 re-check per alerted price.
 
 CONFIG CHANGES vs previous version
   Added:   min_lead_h, deadline_days, suspicious_pct
-  Removed: drop_abs_inr, drop_pct, drop_window_h (DROP replaced by NEW LOW)
+  Removed: drop_abs_inr, drop_pct, drop_window_h (DROP replaced by NEW LOW);
+           nearby dates (flex, buffer scan, alternative watch, burst, CHEAPER DATE): one date per route
   Changed: realert_abs_inr / realert_pct are combined as max(), and also set GOOD/GREAT's
            minimum gap below the baseline median.
 
@@ -95,7 +83,7 @@ from zoneinfo import ZoneInfo
 RANK = {None: 0, "good": 1, "near": 1, "great": 2, "hit": 2}
 REALERT = ("deal", "new_low", "target")  # rules that use RE-ALERT STATE
 PRIORITY = [("target", "hit"), ("deal", "great"), ("book_by", None), ("target", "near"), ("deal", "good"),
-            ("new_low", None), ("cheaper_date", None)]
+            ("new_low", None)]
 
 
 def step(p, a, pct):
@@ -128,7 +116,7 @@ def grade(cfg, price, baseline):
     return None
 
 
-def decide(cfg, now, *, day, is_anchor, price, baseline, lowest, target, target_buffer, d_price, states, **_):
+def decide(cfg, *, day, price, baseline, lowest, target, target_buffer, states, **_):
     """Rules for one fresh valid price of `day` → (fired, clear).
     fired: [{"rule", "level", "saving", ...message details}]; clear: rules whose state for `day`
     must be deleted because the deal went away. `states` is db.alert_states() for the route."""
@@ -143,7 +131,7 @@ def decide(cfg, now, *, day, is_anchor, price, baseline, lowest, target, target_
                 or price <= s["price_inr"] - realert_step(cfg, s["price_inr"]))
 
     out = []
-    if is_anchor and len(baseline) >= d["min_samples"]:
+    if len(baseline) >= d["min_samples"]:
         g = grade(cfg, price, baseline)
         if g and again("deal", g["level"]):
             out.append({"rule": "deal", "saving": round(g["median"] - price), **g})
@@ -154,12 +142,6 @@ def decide(cfg, now, *, day, is_anchor, price, baseline, lowest, target, target_
         level = "hit" if price <= target else "near" if price <= target + buf else None
         if level and again("target", level):
             out.append({"rule": "target", "level": level, "saving": target - price, "target": target})
-    if not is_anchor and d_price is not None:
-        saving, s = d_price - price, states.get(("cheaper_date", day))
-        if saving >= step(d_price, d["alt_cheaper_abs_inr"], d["alt_cheaper_pct"]) and (
-                s is None or now - datetime.fromisoformat(s["alerted_at"]) >= timedelta(hours=d["alt_realert_h"])
-                or saving - s["saving_inr"] >= d["alt_realert_abs_inr"]):
-            out.append({"rule": "cheaper_date", "level": None, "saving": saving, "d_price": d_price})
     return out, clear
 
 
@@ -222,7 +204,7 @@ def lowest_text(h, tz):
     return f"lowest we've recorded since {since:%d %b} {inr(h['lowest'])}"
 
 
-def line(cfg, r, h, tz):
+def line(cfg, h, tz):
     day, p, lv = day_label(h["day"]), h["price"], h.get("level")
     if h["rule"] == "target":
         t = h["target"]
@@ -233,9 +215,6 @@ def line(cfg, r, h, tz):
                 f"of {h['n']} prices in {cfg['deal']['baseline_days']} days (median {inr(h['median'])})")
     elif h["rule"] == "new_low":
         text = f"📉 NEW LOW {day} · {inr(p)}, previous {lowest_text(h, tz)}"
-    elif h["rule"] == "cheaper_date":
-        text = (f"💡 CHEAPER DATE {day} · {inr(p)}, {inr(h['saving'])} less than your date "
-                f"{day_label(r['anchor_date'])} ({inr(h['d_price'])})")
     else:
         text = (f"⏰ BOOK BY {day} is {h['days_left']} days away: "
                 + (f"now {inr(p)}" if p is not None else "no fresh price right now")
@@ -248,7 +227,7 @@ def message(cfg, r, hits):
     """One Telegram message (HTML) for every rule that fired in one scan; hits sorted by priority()."""
     tz = ZoneInfo(cfg["schedule"]["timezone"])
     head = hits[0]
-    lines = [f"✈️ {route_name(r)}"] + [line(cfg, r, h, tz) for h in hits]
+    lines = [f"✈️ {route_name(r)}"] + [line(cfg, h, tz) for h in hits]
     bits = []
     if o := head.get("obs"):
         bits.append(flight_text(o))

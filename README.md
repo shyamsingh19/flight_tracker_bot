@@ -6,7 +6,7 @@ A single-user Telegram bot that watches domestic Indian fares through the Ignav 
 | File | Role |
 |---|---|
 | `bot.py` | Entry point. Holds the Telegram commands and the tick, heartbeat, daily summary and nightly backup jobs |
-| `checker.py` | Runs the anchor, buffer-scan, alternative and burst checks, plus active hours and expiry |
+| `checker.py` | Runs the scheduled checks of each route's date, plus active hours and expiry |
 | `alerts.py` | Alert rules (pure `decide()`) and the message text |
 | `providers.py` | Ignav client. This is the only data source |
 | `config.py` / `config.toml` | Schema, defaults, validation and the projected-cost formula / every tunable number |
@@ -32,11 +32,12 @@ journalctl -u flightbot -f      # JSON-line logs
 To try it without spending calls, run `DRY_RUN=1 DB_PATH=dry.db .venv/bin/python bot.py`. This answers every check from `fixtures/` with prices jittered by ±10%. Use a separate `DB_PATH` so these calls don't count against your free 1,000.
 
 ## Use
-`/track HYD DEL 2026-12-20 flex=5 target=4500 stops=0 airline=6E flight=6E2134 time=06-12 bags=1 every=120 force`
+`/track HYD DEL 2026-12-20 target=4500 stops=0 airline=6E flight=6E2134 time=06-12 bags=1 every=120 force`
 - Everything after the date is optional.
+- A route watches one date. To watch another day, track it as its own route.
 - `/track` refuses a route that would push projected spend past the hard stop, unless you add `force`.
 
-Other commands: `/list`, `/history`, `/calls` (every search with time, kind and result), `/status`, `/checknow [all]` (limited to `checknow_per_user_day` calls per user per day), `/settarget [4500 [buffer]|off]`, `/pause`, `/resume`, `/delete`, `/reload`. Commands that act on a route never need an id: they reply with one button per tracked route (e.g. "HYD → DEL · Sun 20 Dec"). The same actions are buttons on each route in 🔔 My Alerts.
+Other commands: `/list`, `/history`, `/calls` (every search with time, kind and result), `/status`, `/checknow` (limited to `checknow_per_user_day` calls per user per day), `/settarget [4500 [buffer]|off]`, `/pause`, `/resume`, `/delete`, `/reload`. Commands that act on a route never need an id: they reply with one button per tracked route (e.g. "HYD → DEL · Sun 20 Dec"). The same actions are buttons on each route in 🔔 My Alerts.
 
 To change a number, edit `config.toml` and send `/reload`. The bot replies with the new projected monthly cost and the keys that changed. If the file is invalid, it names the bad key and keeps the old config. `/reload` also re-reads `.env`, so a fixed `IGNAV_API_KEY` takes effect without a restart.
 

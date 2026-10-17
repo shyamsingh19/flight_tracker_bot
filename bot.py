@@ -40,7 +40,6 @@ HELP = """✈️ <b>Flight price alert</b>
 /search — guided: city → city → date → track
 /track <code>HYD DEL 2026-12-20</code> — track directly
 <i>Optional extras for /track:</i>
-  <code>flex=5</code> — also watch ±5 days
   <code>target=4500</code> — alert at or below ₹4500
   <code>stops=0</code> — max stops
   <code>airline=6E</code> · <code>flight=6E2134</code>
@@ -53,10 +52,11 @@ HELP = """✈️ <b>Flight price alert</b>
 /list — your tracked routes (tap one for its buttons)
 /history — price history
 /calls — every search made, with result
-/checknow [all] — check right now
+/checknow — check right now
 /settarget [<code>4500</code> [buffer] · <code>off</code>]
 /pause · /resume · /delete
 <i>These ask which route with a button each.</i>
+<i>Each route watches one date. For another day, track it too.</i>
 
 ⚙️ <b>System</b>
 /status — health and spend
@@ -90,12 +90,8 @@ def latest_any(rid, day):
 
 
 def route_line(r, now):
-    head = (f"{route_name(r)} ±{r['flex_days']}"
-            f"{'' if r['status'] == 'active' else ' · ' + r['status']}")
-    o = latest_any(r["id"], r["anchor_date"])
-    parts = [head, f"D {inr(o['price_inr'])} ({age(o['observed_at'], now)} ago, {o['flight_no']})" if o else "D: no price yet"]
-    if r["alt_date"] and (a := latest_any(r["id"], r["alt_date"])):
-        parts.append(f"alt {day_label(r['alt_date'])} {inr(a['price_inr'])} ({age(a['observed_at'], now)} ago)")
+    head = route_name(r) + ("" if r["status"] == "active" else " · " + r["status"])
+    parts = [head, price_text(latest_any(r["id"], r["anchor_date"]), now)]
     if r["target_inr"]:
         buf = r["target_buffer_inr"]
         parts.append(f"target {inr(r['target_inr'])}" + (f" +{inr(buf)}" if buf is not None else ""))
@@ -104,8 +100,12 @@ def route_line(r, now):
     return " · ".join(parts)
 
 
-def route_card(cfg, r, now):
-    """/list view: every watched date with its latest price, D and the cheapest day marked."""
+def price_text(o, now):
+    return f"{inr(o['price_inr'])} · {o['flight_no']} · {age(o['observed_at'], now)} ago" if o else "no price yet"
+
+
+def route_card(r, now):
+    """/list view: the route and its latest price."""
     head = f"<b>{route_name(r)}</b>"
     if r["target_inr"]:
         buf = r["target_buffer_inr"]
@@ -114,28 +114,12 @@ def route_card(cfg, r, now):
         head += f" · {r['status']}"
     if r["consecutive_failures"]:
         head += f" · ⚠️ {r['consecutive_failures']} failures"
-    days = sorted([r["anchor_date"], *checker.buffer_dates(r["anchor_date"], r["flex_days"],
-                                                           checker.local(cfg, now).date())])
-    obs = {d: latest_any(r["id"], d) for d in days}
-    priced = [o for o in obs.values() if o]
-    best = min(priced, key=lambda o: o["price_inr"])["depart_date"] if priced else None
-    rows = []
-    for d in days:
-        o = obs[d]
-        row = f"{day_label(d)}   {inr(o['price_inr']) if o else '—':<8}"
-        if d == r["anchor_date"]:
-            row += "  ← your date" + (f" · {o['flight_no']}" if o else "")
-        if d == best and len(priced) > 1:
-            row += "  ⭐ cheapest"
-        rows.append(row.rstrip())
-    tail = f"\nupdated {age(max(o['observed_at'] for o in priced), now)} ago" if priced else "\nno prices yet"
-    return f"{head}\n<pre>{html.escape(chr(10).join(rows))}</pre>{tail}"
+    return f"{head}\n{price_text(latest_any(r['id'], r['anchor_date']), now)}"
 
 
 def projection_text(cfg, now):
-    lo, hi = checker.projected(cfg, now)
     n = db.one("SELECT COUNT(*) n FROM routes WHERE status='active'")["n"]
-    return (f"Projected spend with this config: {inr(lo)}–{inr(hi)}/month for {n} routes "
+    return (f"Projected spend with this config: {inr(checker.projected(cfg, now))}/month for {n} routes "
             f"(cap {inr(cfg['budget']['monthly_cap_inr'])}, hard stop {inr(budget.hard_stop_inr(cfg))}).")
 
 
@@ -183,9 +167,8 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 def parse_track(cfg, args, today):
-    rd = cfg["route_defaults"]
     if len(args) < 3:
-        raise ValueError("usage: /track HYD DEL 2026-12-20 [flex=5] [target=4500] …")
+        raise ValueError("usage: /track HYD DEL 2026-12-20 [target=4500] …")
     o, d = args[0].upper(), args[1].upper()
     if not (re.fullmatch(r"[A-Z]{3}", o) and re.fullmatch(r"[A-Z]{3}", d)) or o == d:
         raise ValueError("origin and destination must be two different 3-letter airport codes")
@@ -194,11 +177,8 @@ def parse_track(cfg, args, today):
         raise ValueError("that date has passed")
     opts = dict(a.split("=", 1) for a in args[3:] if "=" in a)
     flags = {a.lower() for a in args[3:] if "=" not in a}
-    if bad := (set(opts) - {"flex", "target", "stops", "airline", "flight", "time", "bags", "every"}) | (flags - {"force"}):
+    if bad := (set(opts) - {"target", "stops", "airline", "flight", "time", "bags", "every"}) | (flags - {"force"}):
         raise ValueError(f"unknown option(s): {', '.join(sorted(bad))}")
-    flex = int(opts.get("flex", rd["flex_days"]))
-    if not 0 <= flex <= rd["max_flex_days"]:
-        raise ValueError(f"flex must be 0–{rd['max_flex_days']}")
     stops = int(opts["stops"]) if "stops" in opts else None
     if stops is not None and not 0 <= stops <= 2:
         raise ValueError("stops must be 0–2")
@@ -211,7 +191,7 @@ def parse_track(cfg, args, today):
     if every is not None and every < cfg["schedule"]["min_interval_min"]:
         raise ValueError(f"every must be ≥ {cfg['schedule']['min_interval_min']} min")
     return {
-        "origin": o, "destination": d, "anchor_date": day.isoformat(), "flex_days": flex,
+        "origin": o, "destination": d, "anchor_date": day.isoformat(),
         "airline": opts.get("airline", "").upper() or None,
         "flight_no": opts.get("flight", "").replace(" ", "").upper() or None,
         "max_stops": stops, "time_start": t0, "time_end": t1,
@@ -233,21 +213,20 @@ async def cmd_track(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 def save_route(cfg, route, force, now):
     """Insert a parsed route unless it would push projected spend past the hard stop → reply text."""
     route["created_at"] = iso(now)
-    lo0, hi0 = checker.projected(cfg, now)
-    lo, hi = checker.projected(cfg, now, extra=route)
+    before, after = checker.projected(cfg, now), checker.projected(cfg, now, extra=route)
     stop = budget.hard_stop_inr(cfg)
-    if hi > stop and not force:
-        return (f"❌ Not saved. With this route, projected spend is {inr(lo)}–{inr(hi)}/month, over the "
+    if after > stop and not force:
+        return (f"❌ Not saved. With this route, projected spend is {inr(after)}/month, over the "
                 f"{inr(stop)} hard stop. Raise [budget] monthly_cap_inr in config.toml and /reload, "
-                f"use a smaller flex= or every=120, or add 'force' to /track.")
+                f"use every=120, or add 'force' to /track.")
     db.insert("routes", route)
-    return (f"✅ Tracking {route_name(route)} ±{route['flex_days']} days. This route ≈ {inr(lo - lo0)}–{inr(hi - hi0)}"
-            f"/month; all routes {inr(lo)}–{inr(hi)} (cap {inr(cfg['budget']['monthly_cap_inr'])}). First check "
+    return (f"✅ Tracking {route_name(route)}. This route ≈ {inr(after - before)}"
+            f"/month; all routes {inr(after)} (cap {inr(cfg['budget']['monthly_cap_inr'])}). First check "
             f"within a minute if inside active hours.")
 
 
 async def cmd_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    text, kb = alerts_view(cfg_of(ctx), update.effective_user.id, now_utc())
+    text, kb = alerts_view(update.effective_user.id, now_utc())
     await say_kb(update, text, kb)
 
 
@@ -316,17 +295,13 @@ def set_target(r, text):
 async def cmd_history(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not (r := await pick(update, ctx, "history")):
         return
-    cfg, now = cfg_of(ctx), now_utc()
+    cfg = cfg_of(ctx)
     tz = ZoneInfo(cfg["schedule"]["timezone"])
     rows = db.q(f"SELECT * FROM observations WHERE route_id=? AND depart_date=? AND {checker.PRICED} "
                 "ORDER BY observed_at DESC LIMIT ?", (r["id"], r["anchor_date"], cfg["ui"]["history_default_n"]))
     lines = [f"📈 {route_name(r)}"]
     lines += [f"{parse(o['observed_at']).astimezone(tz):%d %b %H:%M} {inr(o['price_inr'])} {o['flight_no']}"
               for o in reversed(rows)]
-    lines.append("Buffer dates (latest):")
-    for d in checker.buffer_dates(r["anchor_date"], r["flex_days"], checker.local(cfg, now).date()):
-        o = latest_any(r["id"], d)
-        lines.append(f"{day_label(d)} " + (f"{inr(o['price_inr'])} ({age(o['observed_at'], now)} ago)" if o else "—"))
     await say(update, "\n".join(lines))
 
 
@@ -359,44 +334,28 @@ async def cmd_checknow(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not (r := await pick(update, ctx, "checknow")):
         return
     cfg, now = cfg_of(ctx), now_utc()
-    words = {a.lower() for a in ctx.args[1:]}
-    dates = [r["anchor_date"]]
-    if "all" in words:
-        dates += checker.buffer_dates(r["anchor_date"], r["flex_days"], checker.local(cfg, now).date())
-    cost = len(dates) * config.per_call_inr(cfg)
-    if cost > cfg["ui"]["checknow_confirm_above_inr"] and "yes" not in words:
-        return await say_kb(update, f"This runs {len(dates)} calls ≈ ₹{cost:.1f} (free calls left: "
-                                    f"{budget.free_left(cfg)}).",
-                            Kb([[Btn("✅ Run it", callback_data=f"p:checknow:{r['id']}:{' '.join(words | {'yes'})}")]]))
-    await run_checknow(update, ctx, r, dates, now)
+    if why := checknow_quota(cfg, update.effective_user.id, now):
+        return await say(update, why)
+    await say(update, f"Checking {day_label(r['anchor_date'])}, ≈ ₹{config.per_call_inr(cfg):.2f}…")
+    msgs = await asyncio.to_thread(checker.check_now, cfg, r["id"], now)
+    for m in msgs:  # alerts go to the route's owner, like a scheduled check
+        await (send(ctx, m) if isinstance(m, alerts.Flight) else say(update, m))
+    o = db.one("SELECT * FROM observations WHERE route_id=? AND kind='manual' AND observed_at=? "
+               "ORDER BY id DESC LIMIT 1", (r["id"], iso(now)))
+    await say(update, f"{day_label(r['anchor_date'])} " + (
+        inr(o["price_inr"]) + f" {o['flight_no']}" if o and o["price_inr"] is not None
+        else html.escape(o["error"] or "") if o else "skipped"))
 
 
-def checknow_quota(cfg, uid, n, now):
-    """Reserve n manual calls for this user today (schedule timezone). Returns an error text if over the limit."""
+def checknow_quota(cfg, uid, now):
+    """Reserve one manual call for this user today (schedule timezone). Returns an error text if over the limit."""
     limit = cfg["ui"]["checknow_per_user_day"]
     key = f"checknow:{uid}:{checker.local(cfg, now).date()}"
     used = int(db.kv_get(key) or 0)
-    if used + n > limit:
-        return f"⛔ Daily manual-check limit: {used}/{limit} used today, this needs {n}. Resets at midnight."
-    db.kv_set(key, str(used + n))
+    if used >= limit:
+        return f"⛔ Daily manual-check limit: {used}/{limit} used today. Resets at midnight."
+    db.kv_set(key, str(used + 1))
     return None
-
-
-async def run_checknow(update, ctx, r, dates, now):
-    cfg = cfg_of(ctx)
-    if why := checknow_quota(cfg, update.effective_user.id, len(dates), now):
-        return await say(update, why)
-    await say(update, f"Checking {len(dates)} date(s), ≈ ₹{len(dates) * config.per_call_inr(cfg):.2f}…")
-    msgs = await asyncio.to_thread(checker.check_now, cfg, r["id"], dates, now)
-    for m in msgs:  # alerts go to the route's owner, like a scheduled check
-        await (send(ctx, m) if isinstance(m, alerts.Flight) else say(update, m))
-    lines = []
-    for d in dates:
-        o = db.one("SELECT * FROM observations WHERE route_id=? AND depart_date=? AND kind='manual' AND observed_at=? "
-                   "ORDER BY id DESC LIMIT 1", (r["id"], d, iso(now)))
-        lines.append(f"{day_label(d)} " + (inr(o["price_inr"]) + f" {o['flight_no']}" if o and o["price_inr"] is not None
-                                           else html.escape(o["error"] or "") if o else "skipped"))
-    await say(update, "\n".join(lines))
 
 
 async def cmd_reload(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -532,7 +491,7 @@ async def menu_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     what = q.data.split(":")[1]
     if what == "alerts":
-        text, kb = alerts_view(cfg_of(ctx), update.effective_user.id, now_utc())
+        text, kb = alerts_view(update.effective_user.id, now_utc())
         await q.message.reply_text(text, reply_markup=kb)
     elif what == "status":
         await q.message.reply_text(status_text(cfg_of(ctx), now_utc()))
@@ -671,21 +630,21 @@ def tracked(s, uid):
                   (s["o"], s["d"], s["day"], 0 if s["direct"] else None, uid))
 
 
-def alerts_view(cfg, uid, now):
+def alerts_view(uid, now):
     """🔔 My Alerts: every route's card, and one button per route that opens route_view."""
     rows = live_routes(uid)
     if not rows:
         return "🔔 No price alerts yet.", Kb([[Btn("🔍 Flight Search", callback_data="menu:search")]])
     kb = [[Btn(f"⚙️ {route_name(r)}", callback_data=f"v:{r['id']}")] for r in rows]
     return ("🔔 Your price alerts (tap a route below for its options)\n\n"
-            + "\n\n".join(route_card(cfg, r, now) for r in rows)), Kb(kb)
+            + "\n\n".join(route_card(r, now) for r in rows)), Kb(kb)
 
 
-def route_view(cfg, r, now):
+def route_view(r, now):
     """One route's card with its action buttons; button data carries the id, the labels never show it."""
     i = r["id"]
     paused = r["status"] == "paused"
-    return route_card(cfg, r, now), Kb([
+    return route_card(r, now), Kb([
         [Btn("🔄 Check now", callback_data=f"p:checknow:{i}:"), Btn("🎯 Target", callback_data=f"t:{i}")],
         [Btn("📈 Price history", callback_data=f"p:history:{i}:"), Btn("📜 Searches", callback_data=f"p:calls:{i}:")],
         [Btn("▶️ Resume" if paused else "⏸ Pause", callback_data=f"r:{'active' if paused else 'paused'}:{i}"),
@@ -698,7 +657,7 @@ async def view_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not (r := own_route(update, int(q.data.split(":")[1]))):
         return await q.answer("Route not found")
     await q.answer()
-    text, kb = route_view(cfg_of(ctx), r, now_utc())
+    text, kb = route_view(r, now_utc())
     await q.message.reply_text(text, reply_markup=kb)
 
 
@@ -710,9 +669,9 @@ async def route_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return await q.answer("Route not found")
     db.update_route(r["id"], status=status)
     await q.answer(f"{route_name(r)} → {status}")
-    cfg, now = cfg_of(ctx), now_utc()
-    text, kb = route_view(cfg, db.route(r["id"]), now) if status != "deleted" else \
-        alerts_view(cfg, update.effective_user.id, now)
+    now = now_utc()
+    text, kb = route_view(db.route(r["id"]), now) if status != "deleted" else \
+        alerts_view(update.effective_user.id, now)
     await q.edit_message_text(text, reply_markup=kb)
 
 

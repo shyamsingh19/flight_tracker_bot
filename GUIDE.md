@@ -7,7 +7,7 @@ Part 1 explains how to use the bot in Telegram. Part 2 explains how to tune it w
 ## Part 1: Using the bot
 
 ### The idea in one paragraph
-You pick a route and a date **D** (for example HYD→DEL on 20 Dec). The bot checks the price of D through the day. Once a day it also checks the nearby dates (D±flex), and every few hours it re-checks the cheapest of them. It messages you only when something is worth acting on. Every check is a paid Ignav call (about ₹0.23), so the bot is built to check just often enough.
+You pick a route and a date **D** (for example HYD→DEL on 20 Dec). The bot checks the price of D, and only D, through the day. If you could also fly on another day, track that day as its own route (one route per date). It messages you only when something is worth acting on. Every check is a paid Ignav call (about ₹0.23), so the bot is built to check just often enough.
 
 ### Fastest path: the menu
 Send `/start` to get four buttons:
@@ -33,13 +33,12 @@ Send `/cancel` to leave a search halfway through.
 
 ### Power path: `/track`
 ```
-/track HYD DEL 2026-12-20 flex=5 target=4500 stops=0 airline=6E flight=6E2134 time=06-12 bags=1 every=120 force
+/track HYD DEL 2026-12-20 target=4500 stops=0 airline=6E flight=6E2134 time=06-12 bags=1 every=120 force
 ```
 Only the origin, destination and date are required.
 
 | Option | Meaning | Default |
 |---|---|---|
-| `flex=N` | Also scan D−N to D+N once a day (0 = only D) | `flex_days` (5) |
 | `target=4500` | Always alert at or below this price, whatever the history says | none |
 | `stops=0` | Maximum number of stops (0–2) | `max_stops` (1) |
 | `airline=6E` | Only this airline | any |
@@ -58,7 +57,6 @@ Only the origin, destination and date are required.
 | `/pause 3` / `/resume 3` | Stop or restart checks. A paused route costs nothing |
 | `/delete 3` | Remove the route |
 | `/checknow 3` | Check D right now (1 call) |
-| `/checknow 3 all` | Check D and every date in D±flex. This is many calls, so the bot asks you to confirm by adding `yes` |
 | `/status` | Health and spend |
 
 A route expires on its own once its date passes, or, for a `flight=` route, once that flight departs.
@@ -67,11 +65,11 @@ A route expires on its own once its date passes, or, for a `flight=` route, once
 | Alert | When it fires |
 |---|---|
 | 🟢 **GOOD / GREAT DEAL** | D's price is in the cheapest 25% (good) or 10% (great) of the prices seen over the last 30 days. It needs at least 20 data points first, so expect no deal alerts in a new route's first day or so |
-| 📉 **Drop** | D fell by at least ₹300 **and** 5% below its lowest price in the last 24 h |
-| 💡 **Cheaper alternative** | A nearby date is cheaper than D by at least ₹300 or 5%, whichever is larger |
+| 📉 **New low** | D is below the lowest price the bot has recorded for it (also needs the 20 data points) |
+| ⏰ **Book by** | Once, 14 days before D: today's price and the lowest seen |
 | 🎯 **Target** | The price is at or below your `target=` plus `[deal] target_buffer_inr` (₹300), so a fare just above target still pings you |
 
-The same deal is not sent twice. The bot re-alerts only if the price falls by another ₹100 and 3%, or the deal upgrades from good to great. A good deal also triggers a **burst**: the bot checks D±5 straight away, so the alert shows nearby prices too.
+The same deal is not sent twice. The bot re-alerts only if the price falls by another ₹100 and 3%, or the deal upgrades from good to great.
 
 Each alert includes a Google Flights link. **Book on the airline's website.** The bot only watches prices.
 
@@ -100,25 +98,21 @@ Cost per route per day, using the defaults (active 08–23, ₹0.23 a call):
 
 | Job | Calls/day | Controlled by |
 |---|---|---|
-| Anchor (date D) | 16 (hourly, 08:00–23:00) | `anchor_every_min`, `active_hours` |
-| Buffer scan (D±flex) | 2 × flex = 10 | `flex_days` / `flex=`, `buffer_scan_every_h` |
-| Alternative watch | 5 (every 3 h after 08:00) | `alt_watch_every_h` |
-| **Total** | **31/day ≈ ₹214/month** | |
+| Checks of date D | 16 (hourly, 08:00–23:00) | `anchor_every_min`, `active_hours`, `every=` |
+| **Total** | **16/day ≈ ₹110/month** | |
 
 Other settings for comparison (monthly cost per route):
 
 | Setup | ₹/month |
 |---|---|
-| defaults (flex 5, every 60) | 214 |
-| `every=120` | 159 |
-| `flex=3` | 186 |
-| `flex=0` (D only, no alt watch) | 110 |
-| `every=30` | 317 |
+| hourly (every 60) | 110 |
+| `every=120` | 55 |
+| `every=30` | 214 |
 
 Dates more than 45 days away are checked 3× less often (`far_out_days`, `far_out_slowdown`), so they cost less until they get close.
 
-With the default cap (₹750) and hard stop (90% = ₹675), you can run **about 3 routes at defaults**. When a fourth would cross the hard stop, `/track` refuses it. Choose one:
-- Slow it down with `every=120` or a smaller `flex`.
+With the default cap (₹750) and hard stop (90% = ₹675), you can run **about 6 hourly routes**. When the next one would cross the hard stop, `/track` refuses it. Choose one:
+- Slow it down with `every=120`.
 - Raise `monthly_cap_inr`.
 - Add `force` and accept that checks will stop for the rest of the month once ₹675 is reached.
 
@@ -130,10 +124,8 @@ Searches and `/checknow` count against the same budget. The first 1,000 Ignav ca
 | Fewer, only-really-good alerts | `good_percentile = 15`, `great_percentile = 5`, `drop_abs_inr = 500` |
 | More sensitive drop alerts | `drop_abs_inr = 200`, `drop_pct = 3` |
 | No late-night checks | `active_hours = "08-21"` (also saves calls) |
-| Spend less on all routes | `anchor_every_min = 120`, or `alt_watch_every_h = 0` to turn alternatives off |
+| Spend less on all routes | `anchor_every_min = 120` |
 | Check the travel date more often | `anchor_every_min = 30` (doubles those calls) |
-| Scan nearby dates every 2 days | `buffer_scan_every_h = 48` |
-| Wider flexibility | `flex_days = 7` (max is `max_flex_days`) |
 | Deal alerts sooner on a new route | `min_samples = 10` (less reliable) |
 | Business class | `cabin_class = "business"` |
 | Show more search results | `[ui] search_results_n = 8` |
@@ -141,9 +133,8 @@ Searches and `/checknow` count against the same budget. The first 1,000 Ignav ca
 | Card charges a different rate | `usd_inr_effective = 118`. This keeps the spend figures honest |
 
 ### Rules the validator enforces
-- `active_hours` is `"HH-HH"` with start < end. `buffer_scan_at` must fall inside it.
-- `buffer_scan_every_h` must be 0 or a multiple of 24.
-- `flex_days` must be ≤ `max_flex_days`, and `great_percentile` must be ≤ `good_percentile`.
+- `active_hours` is `"HH-HH"` with start < end.
+- `great_percentile` must be ≤ `good_percentile`.
 - Per-route `every=` can't go below `min_interval_min` (15).
 - Unknown sections or keys are rejected, which catches typos.
 
